@@ -1,6 +1,6 @@
 # EWF Tobalaba Client
 
-![EWF](http://energyweb.org/wp-content/uploads/2017/02/EnergyWebnoback-1.png)
+![EWF](https://energyweb.org/wp-content/uploads/2018/04/energy-web-logo-final.svg)
 
 Repository for the [**Energy Web Foundation**](http://energyweb.org/) client for the Tobalaba test network.
 
