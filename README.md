@@ -53,8 +53,8 @@ Once you have rustup, install parity or download and build from source
 $ git clone https://github.com/energywebfoundation/energyweb-client
 $ cd energyweb-client
 
-# build in release mode
-$ cargo build --release
+# build
+$ cargo build
 ```
 
 This will produce an executable in the `./target/release` subdirectory.
