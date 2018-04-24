@@ -18,13 +18,12 @@
 
 use std::cmp;
 use hash::keccak;
-use bigint::hash::{H256, H520};
-use util::*;
+use ethereum_types::{H256, H520, Address};
 use bytes::Bytes;
 use super::{Height, View, BlockHash, Step};
 use error::Error;
 use header::Header;
-use rlp::{Rlp, UntrustedRlp, RlpStream, Encodable, Decodable, DecoderError};
+use rlp::{UntrustedRlp, RlpStream, Encodable, Decodable, DecoderError};
 use ethkey::{recover, public_to_address};
 use super::super::vote_collector::Message;
 
@@ -101,7 +100,7 @@ impl ConsensusMessage {
 
 	pub fn verify(&self) -> Result<Address, Error> {
 		let full_rlp = ::rlp::encode(self);
-		let block_info = Rlp::new(&full_rlp).at(1);
+		let block_info = UntrustedRlp::new(&full_rlp).at(1)?;
 		let public_key = recover(&self.signature.into(), &keccak(block_info.as_raw()))?;
 		Ok(public_to_address(&public_key))
 	}

@@ -17,9 +17,9 @@
 //! Test implementation of SyncProvider.
 
 use std::collections::BTreeMap;
-use bigint::hash::H256;
+use ethereum_types::H256;
 use parking_lot::RwLock;
-use ethsync::{SyncProvider, EthProtocolInfo, SyncStatus, SyncState, PeerInfo, TransactionStats};
+use sync::{SyncProvider, EthProtocolInfo, SyncStatus, SyncState, PeerInfo, TransactionStats};
 
 /// TestSyncProvider config.
 pub struct Config {

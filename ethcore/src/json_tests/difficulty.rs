@@ -16,7 +16,7 @@
 
 use ethjson;
 use header::Header;
-use bigint::prelude::U256;
+use ethereum_types::U256;
 use spec::Spec;
 
 pub fn json_difficulty_test(json_data: &[u8], spec: Spec) -> Vec<String> {
@@ -59,9 +59,11 @@ mod difficulty_test_byzantium {
 
 mod difficulty_test_foundation {
 	use super::json_difficulty_test;
+	use tempdir::TempDir;
 
 	fn do_json_test(json_data: &[u8]) -> Vec<String> {
-		json_difficulty_test(json_data, ::ethereum::new_foundation(&::std::env::temp_dir()))
+		let tempdir = TempDir::new("").unwrap();
+		json_difficulty_test(json_data, ::ethereum::new_foundation(&tempdir.path()))
 	}
 
 	declare_test!{DifficultyTests_difficultyMainNetwork, "BasicTests/difficultyMainNetwork.json"}

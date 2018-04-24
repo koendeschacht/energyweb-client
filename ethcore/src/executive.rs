@@ -18,9 +18,7 @@
 use std::cmp;
 use std::sync::Arc;
 use hash::keccak;
-use bigint::prelude::{U256, U512};
-use bigint::hash::H256;
-use util::*;
+use ethereum_types::{H256, U256, U512, Address};
 use bytes::{Bytes, BytesRef};
 use state::{Backend as StateBackend, State, Substate, CleanupMode};
 use machine::EthereumMachine as Machine;
@@ -696,16 +694,14 @@ mod tests {
 	use rustc_hex::FromHex;
 	use ethkey::{Generator, Random};
 	use super::*;
-	use bigint::prelude::{U256, U512};
-	use bigint::hash::H256;
-	use util::Address;
+	use ethereum_types::{H256, U256, U512, Address};
 	use bytes::BytesRef;
 	use vm::{ActionParams, ActionValue, CallType, EnvInfo, CreateContractAddress};
 	use evm::{Factory, VMType};
 	use error::ExecutionError;
 	use machine::EthereumMachine;
 	use state::{Substate, CleanupMode};
-	use tests::helpers::*;
+	use test_helpers::{get_temp_state_with_factory, get_temp_state};
 	use trace::trace;
 	use trace::{FlatTrace, Tracer, NoopTracer, ExecutiveTracer};
 	use trace::{VMTrace, VMOperation, VMExecutedOperation, MemoryDiff, StorageDiff, VMTracer, NoopVMTracer, ExecutiveVMTracer};
@@ -725,7 +721,7 @@ mod tests {
 	}
 
 	// TODO: replace params with transactions!
-	evm_test!{test_sender_balance: test_sender_balance_jit, test_sender_balance_int}
+	evm_test!{test_sender_balance: test_sender_balance_int}
 	fn test_sender_balance(factory: Factory) {
 		let sender = Address::from_str("0f572e5295c57f15886f9b263e2f6d2d6c7b5ec6").unwrap();
 		let address = contract_address(CreateContractAddress::FromSenderAndNonce, &sender, &U256::zero(), &[]).0;
@@ -750,13 +746,12 @@ mod tests {
 		assert_eq!(state.storage_at(&address, &H256::new()).unwrap(), H256::from(&U256::from(0xf9u64)));
 		assert_eq!(state.balance(&sender).unwrap(), U256::from(0xf9));
 		assert_eq!(state.balance(&address).unwrap(), U256::from(0x7));
-		// 0 cause contract hasn't returned
 		assert_eq!(substate.contracts_created.len(), 0);
 
 		// TODO: just test state root.
 	}
 
-	evm_test!{test_create_contract_out_of_depth: test_create_contract_out_of_depth_jit, test_create_contract_out_of_depth_int}
+	evm_test!{test_create_contract_out_of_depth: test_create_contract_out_of_depth_int}
 	fn test_create_contract_out_of_depth(factory: Factory) {
 		// code:
 		//
@@ -1087,7 +1082,7 @@ mod tests {
 		assert_eq!(vm_tracer.drain().unwrap(), expected_vm_trace);
 	}
 
-	evm_test!{test_create_contract_value_too_high: test_create_contract_value_too_high_jit, test_create_contract_value_too_high_int}
+	evm_test!{test_create_contract_value_too_high: test_create_contract_value_too_high_int}
 	fn test_create_contract_value_too_high(factory: Factory) {
 		// code:
 		//
@@ -1139,7 +1134,7 @@ mod tests {
 		assert_eq!(substate.contracts_created.len(), 0);
 	}
 
-	evm_test!{test_create_contract_without_max_depth: test_create_contract_without_max_depth_jit, test_create_contract_without_max_depth_int}
+	evm_test!{test_create_contract_without_max_depth: test_create_contract_without_max_depth_int}
 	fn test_create_contract_without_max_depth(factory: Factory) {
 		// code:
 		//
@@ -1192,7 +1187,7 @@ mod tests {
 
 	// test is incorrect, mk
 	// TODO: fix (preferred) or remove
-	evm_test_ignore!{test_aba_calls: test_aba_calls_jit, test_aba_calls_int}
+	evm_test_ignore!{test_aba_calls: test_aba_calls_int}
 	fn test_aba_calls(factory: Factory) {
 		// 60 00 - push 0
 		// 60 00 - push 0
@@ -1252,7 +1247,7 @@ mod tests {
 
 	// test is incorrect, mk
 	// TODO: fix (preferred) or remove
-	evm_test_ignore!{test_recursive_bomb1: test_recursive_bomb1_jit, test_recursive_bomb1_int}
+	evm_test_ignore!{test_recursive_bomb1: test_recursive_bomb1_int}
 	fn test_recursive_bomb1(factory: Factory) {
 		// 60 01 - push 1
 		// 60 00 - push 0
@@ -1297,7 +1292,7 @@ mod tests {
 
 	// test is incorrect, mk
 	// TODO: fix (preferred) or remove
-	evm_test_ignore!{test_transact_simple: test_transact_simple_jit, test_transact_simple_int}
+	evm_test_ignore!{test_transact_simple: test_transact_simple_int}
 	fn test_transact_simple(factory: Factory) {
 		let keypair = Random.generate().unwrap();
 		let t = Transaction {
@@ -1335,7 +1330,7 @@ mod tests {
 		assert_eq!(state.storage_at(&contract, &H256::new()).unwrap(), H256::from(&U256::from(1)));
 	}
 
-	evm_test!{test_transact_invalid_nonce: test_transact_invalid_nonce_jit, test_transact_invalid_nonce_int}
+	evm_test!{test_transact_invalid_nonce: test_transact_invalid_nonce_int}
 	fn test_transact_invalid_nonce(factory: Factory) {
 		let keypair = Random.generate().unwrap();
 		let t = Transaction {
@@ -1367,7 +1362,7 @@ mod tests {
 		}
 	}
 
-	evm_test!{test_transact_gas_limit_reached: test_transact_gas_limit_reached_jit, test_transact_gas_limit_reached_int}
+	evm_test!{test_transact_gas_limit_reached: test_transact_gas_limit_reached_int}
 	fn test_transact_gas_limit_reached(factory: Factory) {
 		let keypair = Random.generate().unwrap();
 		let t = Transaction {
@@ -1400,7 +1395,7 @@ mod tests {
 		}
 	}
 
-	evm_test!{test_not_enough_cash: test_not_enough_cash_jit, test_not_enough_cash_int}
+	evm_test!{test_not_enough_cash: test_not_enough_cash_int}
 	fn test_not_enough_cash(factory: Factory) {
 
 		let keypair = Random.generate().unwrap();
@@ -1433,7 +1428,7 @@ mod tests {
 		}
 	}
 
-	evm_test!{test_keccak: test_keccak_jit, test_keccak_int}
+	evm_test!{test_keccak: test_keccak_int}
 	fn test_keccak(factory: Factory) {
 		let code = "6064640fffffffff20600055".from_hex().unwrap();
 
@@ -1465,7 +1460,7 @@ mod tests {
 		}
 	}
 
-	evm_test!{test_revert: test_revert_jit, test_revert_int}
+	evm_test!{test_revert: test_revert_int}
 	fn test_revert(factory: Factory) {
 		let contract_address = Address::from_str("cd1722f3947def4cf144679da39c4c32bdc35681").unwrap();
 		let sender = Address::from_str("0f572e5295c57f15886f9b263e2f6d2d6c7b5ec6").unwrap();

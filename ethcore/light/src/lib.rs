@@ -56,15 +56,17 @@ extern crate log;
 extern crate bincode;
 extern crate ethcore_io as io;
 extern crate ethcore_network as network;
-extern crate ethcore_util as util;
-extern crate ethcore_bigint as bigint;
 extern crate ethcore_bytes as bytes;
+extern crate ethcore_transaction as transaction;
+extern crate ethereum_types;
 extern crate ethcore;
+extern crate hashdb;
 extern crate heapsize;
 extern crate futures;
 extern crate itertools;
 extern crate memorydb;
 extern crate patricia_trie as trie;
+extern crate plain_hasher;
 extern crate rand;
 extern crate rlp;
 extern crate parking_lot;
@@ -73,14 +75,13 @@ extern crate rlp_derive;
 extern crate serde;
 extern crate smallvec;
 extern crate stats;
-extern crate time;
 extern crate vm;
 extern crate keccak_hash as hash;
 extern crate triehash;
 extern crate kvdb;
-extern crate kvdb_memorydb;
-extern crate kvdb_rocksdb;
 extern crate memory_cache;
 
+#[cfg(test)]
+extern crate kvdb_memorydb;
 #[cfg(test)]
 extern crate tempdir;

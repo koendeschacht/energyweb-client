@@ -29,9 +29,9 @@
 use request::{self, Request};
 use super::error::Error;
 
-use rlp::*;
-use bigint::prelude::U256;
-use time::{Duration, SteadyTime};
+use rlp::{UntrustedRlp, RlpStream, Decodable, Encodable, DecoderError};
+use ethereum_types::U256;
+use std::time::{Duration, Instant};
 
 /// Credits value.
 ///
@@ -41,7 +41,7 @@ use time::{Duration, SteadyTime};
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Credits {
 	estimate: U256,
-	recharge_point: SteadyTime,
+	recharge_point: Instant,
 }
 
 impl Credits {
@@ -53,7 +53,7 @@ impl Credits {
 	/// a response to a request.
 	pub fn update_to(&mut self, value: U256) {
 		self.estimate = value;
-		self.recharge_point = SteadyTime::now();
+		self.recharge_point = Instant::now();
 	}
 
 	/// Maintain ratio to current limit against an old limit.
@@ -320,7 +320,7 @@ impl FlowParams {
 	/// and number of requests made.
 	pub fn compute_cost(&self, request: &Request) -> Option<U256> {
 		match *request {
-			Request::Headers(ref req) => self.costs.headers.map(|c| c * req.max.into()),
+			Request::Headers(ref req) => self.costs.headers.map(|c| c * U256::from(req.max)),
 			Request::HeaderProof(_) => self.costs.header_proof,
 			Request::TransactionIndex(_) => self.costs.transaction_index,
 			Request::Body(_) => self.costs.body,
@@ -351,19 +351,19 @@ impl FlowParams {
 	pub fn create_credits(&self) -> Credits {
 		Credits {
 			estimate: self.limit,
-			recharge_point: SteadyTime::now(),
+			recharge_point: Instant::now(),
 		}
 	}
 
 	/// Recharge the given credits based on time passed since last
 	/// update.
 	pub fn recharge(&self, credits: &mut Credits) {
-		let now = SteadyTime::now();
+		let now = Instant::now();
 
 		// recompute and update only in terms of full seconds elapsed
 		// in order to keep the estimate as an underestimate.
-		let elapsed = (now - credits.recharge_point).num_seconds();
-		credits.recharge_point = credits.recharge_point + Duration::seconds(elapsed);
+		let elapsed = (now - credits.recharge_point).as_secs();
+		credits.recharge_point = credits.recharge_point + Duration::from_secs(elapsed);
 
 		let elapsed: U256 = elapsed.into();
 
@@ -444,6 +444,6 @@ mod tests {
 		);
 
 		assert_eq!(flow_params2.costs, flow_params3.costs);
-		assert_eq!(flow_params.costs.headers.unwrap(), flow_params2.costs.headers.unwrap() * 2.into());
+		assert_eq!(flow_params.costs.headers.unwrap(), flow_params2.costs.headers.unwrap() * 2u32);
 	}
 }

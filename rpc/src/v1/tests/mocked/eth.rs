@@ -17,23 +17,21 @@
 use std::str::FromStr;
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::{Instant, Duration};
-use rustc_hex::{FromHex, ToHex};
-use time::get_time;
-use rlp;
+use std::time::{Instant, Duration, SystemTime, UNIX_EPOCH};
 
-use bigint::prelude::U256;
-use bigint::hash::H256;
-use util::Address;
+use ethereum_types::{H256, U256, Address};
 use parking_lot::Mutex;
-use ethkey::Secret;
 use ethcore::account_provider::AccountProvider;
-use ethcore::client::{TestBlockChainClient, EachBlockWith, Executed, TransactionId};
+use ethcore::client::{BlockChainClient, BlockId, EachBlockWith, Executed, TestBlockChainClient, TransactionId};
 use ethcore::log_entry::{LocalizedLogEntry, LogEntry};
+use ethcore::miner::MinerService;
 use ethcore::receipt::{LocalizedReceipt, TransactionOutcome};
-use ethcore::transaction::{Transaction, Action};
-use ethcore::miner::{ExternalMiner, MinerService};
-use ethsync::SyncState;
+use ethkey::Secret;
+use sync::SyncState;
+use miner::external::ExternalMiner;
+use rlp;
+use rustc_hex::{FromHex, ToHex};
+use transaction::{Transaction, Action};
 
 use jsonrpc_core::IoHandler;
 use v1::{Eth, EthClient, EthClientOptions, EthFilter, EthFilterClient, EthSigning, SigningUnsafeClient};
@@ -286,6 +284,29 @@ fn rpc_logs_filter() {
 }
 
 #[test]
+fn rpc_blocks_filter() {
+	let tester = EthTester::default();
+	let request_filter = r#"{"jsonrpc": "2.0", "method": "eth_newBlockFilter", "id": 1}"#;
+	let response = r#"{"jsonrpc":"2.0","result":"0x0","id":1}"#;
+
+	assert_eq!(tester.io.handle_request_sync(request_filter), Some(response.to_owned()));
+
+	let request_changes = r#"{"jsonrpc": "2.0", "method": "eth_getFilterChanges", "params": ["0x0"], "id": 1}"#;
+	let response = r#"{"jsonrpc":"2.0","result":[],"id":1}"#;
+
+	assert_eq!(tester.io.handle_request_sync(request_changes), Some(response.to_owned()));
+
+	tester.client.add_blocks(2, EachBlockWith::Nothing);
+
+	let response = format!(
+		r#"{{"jsonrpc":"2.0","result":["0x{:x}","0x{:x}"],"id":1}}"#,
+		tester.client.block_hash(BlockId::Number(1)).unwrap(),
+		tester.client.block_hash(BlockId::Number(2)).unwrap());
+
+	assert_eq!(tester.io.handle_request_sync(request_changes), Some(response.to_owned()));
+}
+
+#[test]
 fn rpc_eth_submit_hashrate() {
 	let tester = EthTester::default();
 
@@ -308,7 +329,7 @@ fn rpc_eth_submit_hashrate() {
 fn rpc_eth_sign() {
 	let tester = EthTester::default();
 
-	let account = tester.accounts_provider.insert_account(Secret::from_slice(&[69u8; 32]), "abcd").unwrap();
+	let account = tester.accounts_provider.insert_account(Secret::from([69u8; 32]), "abcd").unwrap();
 	tester.accounts_provider.unlock_account_permanently(account, "abcd".into()).unwrap();
 	let _message = "0cc175b9c0f1b6a831c399e26977266192eb5ffee6ae2fec3ad71c777531578f".from_hex().unwrap();
 
@@ -316,7 +337,7 @@ fn rpc_eth_sign() {
 		"jsonrpc": "2.0",
 		"method": "eth_sign",
 		"params": [
-			""#.to_owned() + &format!("0x{:?}", account) + r#"",
+			""#.to_owned() + &format!("0x{:x}", account) + r#"",
 			"0x0cc175b9c0f1b6a831c399e26977266192eb5ffee6ae2fec3ad71c777531578f"
 		],
 		"id": 1
@@ -328,7 +349,7 @@ fn rpc_eth_sign() {
 
 #[test]
 fn rpc_eth_author() {
-	let make_res = |addr| r#"{"jsonrpc":"2.0","result":""#.to_owned() + &format!("0x{:?}", addr) + r#"","id":1}"#;
+	let make_res = |addr| r#"{"jsonrpc":"2.0","result":""#.to_owned() + &format!("0x{:x}", addr) + r#"","id":1}"#;
 	let tester = EthTester::default();
 
 	let req = r#"{
@@ -381,7 +402,7 @@ fn rpc_eth_accounts() {
 
 	// with current policy it should return the account
 	let request = r#"{"jsonrpc": "2.0", "method": "eth_accounts", "params": [], "id": 1}"#;
-	let response = r#"{"jsonrpc":"2.0","result":[""#.to_owned() + &format!("0x{:?}", address) + r#""],"id":1}"#;
+	let response = r#"{"jsonrpc":"2.0","result":[""#.to_owned() + &format!("0x{:x}", address) + r#""],"id":1}"#;
 	assert_eq!(tester.io.handle_request_sync(request), Some(response.to_owned()));
 
 	tester.accounts_provider.set_new_dapps_addresses(Some(vec![1.into()])).unwrap();
@@ -539,9 +560,9 @@ fn rpc_eth_transaction_count_by_number_pending() {
 
 #[test]
 fn rpc_eth_pending_transaction_by_hash() {
-	use bigint::hash::H256;
+	use ethereum_types::H256;
 	use rlp;
-	use ethcore::transaction::SignedTransaction;
+	use transaction::SignedTransaction;
 
 	let tester = EthTester::default();
 	{
@@ -790,7 +811,7 @@ fn rpc_eth_send_transaction() {
 		"jsonrpc": "2.0",
 		"method": "eth_sendTransaction",
 		"params": [{
-			"from": ""#.to_owned() + format!("0x{:?}", address).as_ref() + r#"",
+			"from": ""#.to_owned() + format!("0x{:x}", address).as_ref() + r#"",
 			"to": "0xd46e8dd67c5d32be8058bb8eb970870f07244567",
 			"gas": "0x76c0",
 			"gasPrice": "0x9184e72a000",
@@ -810,7 +831,7 @@ fn rpc_eth_send_transaction() {
 	let signature = tester.accounts_provider.sign(address, None, t.hash(None)).unwrap();
 	let t = t.with_signature(signature, None);
 
-	let response = r#"{"jsonrpc":"2.0","result":""#.to_owned() + format!("0x{:?}", t.hash()).as_ref() + r#"","id":1}"#;
+	let response = r#"{"jsonrpc":"2.0","result":""#.to_owned() + format!("0x{:x}", t.hash()).as_ref() + r#"","id":1}"#;
 
 	assert_eq!(tester.io.handle_request_sync(&request), Some(response));
 
@@ -827,7 +848,7 @@ fn rpc_eth_send_transaction() {
 	let signature = tester.accounts_provider.sign(address, None, t.hash(None)).unwrap();
 	let t = t.with_signature(signature, None);
 
-	let response = r#"{"jsonrpc":"2.0","result":""#.to_owned() + format!("0x{:?}", t.hash()).as_ref() + r#"","id":1}"#;
+	let response = r#"{"jsonrpc":"2.0","result":""#.to_owned() + format!("0x{:x}", t.hash()).as_ref() + r#"","id":1}"#;
 
 	assert_eq!(tester.io.handle_request_sync(&request), Some(response));
 }
@@ -841,7 +862,7 @@ fn rpc_eth_sign_transaction() {
 		"jsonrpc": "2.0",
 		"method": "eth_signTransaction",
 		"params": [{
-			"from": ""#.to_owned() + format!("0x{:?}", address).as_ref() + r#"",
+			"from": ""#.to_owned() + format!("0x{:x}", address).as_ref() + r#"",
 			"to": "0xd46e8dd67c5d32be8058bb8eb970870f07244567",
 			"gas": "0x76c0",
 			"gasPrice": "0x9184e72a000",
@@ -869,18 +890,18 @@ fn rpc_eth_sign_transaction() {
 		r#""blockHash":null,"blockNumber":null,"# +
 		&format!("\"chainId\":{},", t.chain_id().map_or("null".to_owned(), |n| format!("{}", n))) +
 		r#""condition":null,"creates":null,"# +
-		&format!("\"from\":\"0x{:?}\",", &address) +
+		&format!("\"from\":\"0x{:x}\",", &address) +
 		r#""gas":"0x76c0","gasPrice":"0x9184e72a000","# +
-		&format!("\"hash\":\"0x{:?}\",", t.hash()) +
+		&format!("\"hash\":\"0x{:x}\",", t.hash()) +
 		r#""input":"0x","# +
 		r#""nonce":"0x1","# +
-		&format!("\"publicKey\":\"0x{:?}\",", t.recover_public().unwrap()) +
-		&format!("\"r\":\"0x{}\",", U256::from(signature.r()).to_hex()) +
+		&format!("\"publicKey\":\"0x{:x}\",", t.recover_public().unwrap()) +
+		&format!("\"r\":\"0x{:x}\",", U256::from(signature.r())) +
 		&format!("\"raw\":\"0x{}\",", rlp.to_hex()) +
-		&format!("\"s\":\"0x{}\",", U256::from(signature.s()).to_hex()) +
-		&format!("\"standardV\":\"0x{}\",", U256::from(t.standard_v()).to_hex()) +
+		&format!("\"s\":\"0x{:x}\",", U256::from(signature.s())) +
+		&format!("\"standardV\":\"0x{:x}\",", U256::from(t.standard_v())) +
 		r#""to":"0xd46e8dd67c5d32be8058bb8eb970870f07244567","transactionIndex":null,"# +
-		&format!("\"v\":\"0x{}\",", U256::from(t.original_v()).to_hex()) +
+		&format!("\"v\":\"0x{:x}\",", U256::from(t.original_v())) +
 		r#""value":"0x9184e72a""# +
 		r#"}},"id":1}"#;
 
@@ -897,7 +918,7 @@ fn rpc_eth_send_transaction_with_bad_to() {
 		"jsonrpc": "2.0",
 		"method": "eth_sendTransaction",
 		"params": [{
-			"from": ""#.to_owned() + format!("0x{:?}", address).as_ref() + r#"",
+			"from": ""#.to_owned() + format!("0x{:x}", address).as_ref() + r#"",
 			"to": "",
 			"gas": "0x76c0",
 			"gasPrice": "0x9184e72a000",
@@ -920,7 +941,7 @@ fn rpc_eth_send_transaction_error() {
 		"jsonrpc": "2.0",
 		"method": "eth_sendTransaction",
 		"params": [{
-			"from": ""#.to_owned() + format!("0x{:?}", address).as_ref() + r#"",
+			"from": ""#.to_owned() + format!("0x{:x}", address).as_ref() + r#"",
 			"to": "0xd46e8dd67c5d32be8058bb8eb970870f07244567",
 			"gas": "0x76c0",
 			"gasPrice": "0x9184e72a000",
@@ -978,7 +999,7 @@ fn rpc_eth_send_raw_transaction() {
 		"id": 1
 	}"#;
 
-	let res = r#"{"jsonrpc":"2.0","result":""#.to_owned() + &format!("0x{:?}", t.hash()) + r#"","id":1}"#;
+	let res = r#"{"jsonrpc":"2.0","result":""#.to_owned() + &format!("0x{:x}", t.hash()) + r#"","id":1}"#;
 
 	assert_eq!(tester.io.handle_request_sync(&req), Some(res));
 }
@@ -1122,13 +1143,14 @@ fn rpc_get_work_should_not_return_block_number() {
 fn rpc_get_work_should_timeout() {
 	let eth_tester = EthTester::default();
 	eth_tester.miner.set_author(Address::from_str("d46e8dd67c5d32be8058bb8eb970870f07244567").unwrap());
-	eth_tester.client.set_latest_block_timestamp(get_time().sec as u64 - 1000);  // Set latest block to 1000 seconds ago
+	let timestamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() - 1000;  // Set latest block to 1000 seconds ago
+	eth_tester.client.set_latest_block_timestamp(timestamp);
 	let hash = eth_tester.miner.map_sealing_work(&*eth_tester.client, |b| b.hash()).unwrap();
 
 	// Request without providing timeout. This should work since we're disabling timeout.
 	let request = r#"{"jsonrpc": "2.0", "method": "eth_getWork", "params": [], "id": 1}"#;
 	let work_response = format!(
-		r#"{{"jsonrpc":"2.0","result":["0x{:?}","0x0000000000000000000000000000000000000000000000000000000000000000","0x0000800000000000000000000000000000000000000000000000000000000000","0x1"],"id":1}}"#,
+		r#"{{"jsonrpc":"2.0","result":["0x{:x}","0x0000000000000000000000000000000000000000000000000000000000000000","0x0000800000000000000000000000000000000000000000000000000000000000","0x1"],"id":1}}"#,
 		hash,
 	);
 	assert_eq!(eth_tester.io.handle_request_sync(request), Some(work_response.to_owned()));
@@ -1136,7 +1158,7 @@ fn rpc_get_work_should_timeout() {
 	// Request with timeout of 0 seconds. This should work since we're disabling timeout.
 	let request = r#"{"jsonrpc": "2.0", "method": "eth_getWork", "params": [0], "id": 1}"#;
 	let work_response = format!(
-		r#"{{"jsonrpc":"2.0","result":["0x{:?}","0x0000000000000000000000000000000000000000000000000000000000000000","0x0000800000000000000000000000000000000000000000000000000000000000","0x1"],"id":1}}"#,
+		r#"{{"jsonrpc":"2.0","result":["0x{:x}","0x0000000000000000000000000000000000000000000000000000000000000000","0x0000800000000000000000000000000000000000000000000000000000000000","0x1"],"id":1}}"#,
 		hash,
 	);
 	assert_eq!(eth_tester.io.handle_request_sync(request), Some(work_response.to_owned()));

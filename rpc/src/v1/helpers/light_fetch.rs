@@ -23,7 +23,6 @@ use ethcore::encoded;
 use ethcore::executed::{Executed, ExecutionError};
 use ethcore::ids::BlockId;
 use ethcore::filter::Filter as EthcoreFilter;
-use ethcore::transaction::{Action, Transaction as EthTransaction, SignedTransaction, LocalizedTransaction};
 use ethcore::receipt::Receipt;
 
 use jsonrpc_core::{BoxFuture, Result};
@@ -37,11 +36,11 @@ use light::cht;
 use light::on_demand::{request, OnDemand, HeaderRef, Request as OnDemandRequest, Response as OnDemandResponse};
 use light::request::Field;
 
-use ethsync::LightSync;
-use bigint::prelude::U256;
+use sync::LightSync;
+use ethereum_types::{U256, Address};
 use hash::H256;
-use util::Address;
 use parking_lot::Mutex;
+use transaction::{Action, Transaction as EthTransaction, SignedTransaction, LocalizedTransaction};
 
 use v1::helpers::{CallRequest as CallRequestHelper, errors, dispatch};
 use v1::types::{BlockNumber, CallRequest, Log, Transaction};
@@ -198,7 +197,19 @@ impl LightFetch {
 
 		let (sync, on_demand, client) = (self.sync.clone(), self.on_demand.clone(), self.client.clone());
 		let req: CallRequestHelper = req.into();
-		let id = num.unwrap_or_default().into();
+
+		// Note: Here we treat `Pending` as `Latest`.
+		//       Since light clients don't produce pending blocks
+		//       (they don't have state) we can safely fallback to `Latest`.
+		let id = match num.unwrap_or_default() {
+			BlockNumber::Num(n) => BlockId::Number(n),
+			BlockNumber::Earliest => BlockId::Earliest,
+			BlockNumber::Latest => BlockId::Latest,
+			BlockNumber::Pending => {
+				warn!("`Pending` is deprecated and may be removed in future versions. Falling back to `Latest`");
+				BlockId::Latest
+			}
+		};
 
 		let from = req.from.unwrap_or(Address::zero());
 		let nonce_fut = match req.nonce {
@@ -309,7 +320,7 @@ impl LightFetch {
 		let best_number = self.client.chain_info().best_block_number;
 		let block_number = |id| match id {
 			BlockId::Earliest => Some(0),
-			BlockId::Latest | BlockId::Pending => Some(best_number),
+			BlockId::Latest => Some(best_number),
 			BlockId::Hash(h) => self.client.block_header(BlockId::Hash(h)).map(|hdr| hdr.number()),
 			BlockId::Number(x) => Some(x),
 		};
@@ -456,7 +467,7 @@ fn execute_tx(gas_known: bool, params: ExecuteParams) -> BoxFuture<ExecutionResu
 						// exception?
 						if executed.exception.is_some() {
 							let old_gas = params.tx.gas;
-							params.tx.gas = params.tx.gas * 2.into();
+							params.tx.gas = params.tx.gas * 2u32;
 							if params.tx.gas > params.hdr.gas_limit() {
 								params.tx.gas = old_gas;
 							} else {

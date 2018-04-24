@@ -14,12 +14,12 @@
 // You should have received a copy of the GNU General Public License
 // along with Parity.  If not, see <http://www.gnu.org/licenses/>.
 
-extern crate ethcore_bigint as bigint;
+extern crate ethereum_types;
 extern crate tiny_keccak;
 
 use std::io;
 use tiny_keccak::Keccak;
-pub use bigint::hash::H256;
+pub use ethereum_types::H256;
 
 /// Get the KECCAK (i.e. Keccak) hash of the empty bytes string.
 pub const KECCAK_EMPTY: H256 = H256( [0xc5, 0xd2, 0x46, 0x01, 0x86, 0xf7, 0x23, 0x3c, 0x92, 0x7e, 0x7d, 0xb2, 0xdc, 0xc7, 0x03, 0xc0, 0xe5, 0x00, 0xb6, 0x53, 0xca, 0x82, 0x27, 0x3b, 0x7b, 0xfa, 0xd8, 0x04, 0x5d, 0x85, 0xa4, 0x70] );
@@ -52,7 +52,7 @@ pub fn write_keccak<T: AsRef<[u8]>>(s: T, dest: &mut [u8]) {
 	}
 }
 
-pub fn keccak_buffer(r: &mut io::BufRead) -> Result<H256, io::Error> {
+pub fn keccak_pipe(r: &mut io::BufRead, w: &mut io::Write) -> Result<H256, io::Error> {
 	let mut output = [0u8; 32];
 	let mut input = [0u8; 1024];
 	let mut keccak = Keccak::new_keccak256();
@@ -64,10 +64,15 @@ pub fn keccak_buffer(r: &mut io::BufRead) -> Result<H256, io::Error> {
 			break;
 		}
 		keccak.update(&input[0..some]);
+		w.write_all(&input[0..some])?;
 	}
 
 	keccak.finalize(&mut output);
 	Ok(output.into())
+}
+
+pub fn keccak_buffer(r: &mut io::BufRead) -> Result<H256, io::Error> {
+	keccak_pipe(r, &mut io::sink())
 }
 
 #[cfg(test)]
@@ -105,6 +110,6 @@ mod tests {
 		let hash = keccak_buffer(&mut file).unwrap();
 
 		// then
-		assert_eq!(format!("{:?}", hash), "68371d7e884c168ae2022c82bd837d51837718a7f7dfb7aa3f753074a35e1d87");
+		assert_eq!(format!("{:x}", hash), "68371d7e884c168ae2022c82bd837d51837718a7f7dfb7aa3f753074a35e1d87");
 	}
 }

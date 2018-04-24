@@ -16,7 +16,7 @@
 
 //! Spec genesis deserialization.
 
-use uint::Uint;
+use uint::{Uint, self};
 use hash::{Address, H256};
 use bytes::Bytes;
 use spec::Seal;
@@ -37,6 +37,7 @@ pub struct Genesis {
 	pub parent_hash: Option<H256>,
 	/// Gas limit.
 	#[serde(rename="gasLimit")]
+	#[serde(deserialize_with="uint::validate_non_zero")]
 	pub gas_limit: Uint,
 	/// Transactions root.
 	#[serde(rename="transactionsRoot")]
@@ -60,7 +61,7 @@ mod tests {
 	use serde_json;
 	use bytes::Bytes;
 	use uint::Uint;
-	use bigint::prelude::{U256, H160, H64 as Eth64, H256 as Eth256};
+	use ethereum_types::{U256, H160, H64 as Eth64, H256 as Eth256};
 	use hash::{H64, H256, Address};
 	use spec::genesis::Genesis;
 	use spec::{Ethereum, Seal};

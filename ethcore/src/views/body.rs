@@ -16,13 +16,13 @@
 
 //! View onto block body rlp.
 
-use hash::keccak;
-use bigint::hash::H256;
 use bytes::Bytes;
-use header::*;
-use transaction::*;
-use super::{TransactionView, HeaderView};
+use ethereum_types::H256;
+use hash::keccak;
+use header::{Header, BlockNumber};
 use rlp::Rlp;
+use transaction::{LocalizedTransaction, UnverifiedTransaction};
+use views::{TransactionView, HeaderView};
 
 /// View onto block rlp.
 pub struct BodyView<'a> {
@@ -68,11 +68,15 @@ impl<'a> BodyView<'a> {
 			}).collect()
 	}
 
+	/// Return the raw rlp for the transactions in the given block.
+	pub fn transactions_rlp(&self) -> Rlp<'a> {
+		self.rlp.at(0)
+	}
+
 	/// Return number of transactions in given block, without deserializing them.
 	pub fn transactions_count(&self) -> usize {
 		self.rlp.at(0).item_count()
 	}
-
 	/// Return List of transactions in given block.
 	pub fn transaction_views(&self) -> Vec<TransactionView<'a>> {
 		self.rlp.at(0).iter().map(TransactionView::new_from_rlp).collect()
@@ -97,6 +101,11 @@ impl<'a> BodyView<'a> {
 			transaction_index: index,
 			cached_sender: None,
 		})
+	}
+
+	/// Returns raw rlp for the uncles in the given block
+	pub fn uncles_rlp(&self) -> Rlp<'a> {
+		self.rlp.at(1)
 	}
 
 	/// Return list of uncles of given block.
@@ -146,4 +155,3 @@ mod tests {
 		assert_eq!(view.uncles_count(), 0);
 	}
 }
-

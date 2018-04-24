@@ -13,7 +13,7 @@ echo "8" >> deb/DEBIAN/compat
 #create control file
 control=deb/DEBIAN/control
 echo "Package: parity" >> $control
-version=`grep -m 1 version Cargo.toml | awk '{print $3}' | tr -d '"' | tr -d "\n"`
+version=`grep -m 1 ^version Cargo.toml | awk '{print $3}' | tr -d '"' | tr -d "\n"`
 echo "Version: $version" >> $control
 echo "Source: parity" >> $control
 echo "Section: science" >> $control

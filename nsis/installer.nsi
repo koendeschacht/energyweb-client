@@ -9,8 +9,8 @@
 !define COMPANYNAME "Parity Technologies"
 !define DESCRIPTION "Fast, light, robust Ethereum implementation"
 !define VERSIONMAJOR 1
-!define VERSIONMINOR 9
-!define VERSIONBUILD 3
+!define VERSIONMINOR 11
+!define VERSIONBUILD 0
 !define ARGS ""
 !define FIRST_START_ARGS "--mode=passive ui"
 

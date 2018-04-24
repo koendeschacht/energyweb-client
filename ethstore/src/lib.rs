@@ -28,12 +28,13 @@ extern crate rustc_hex;
 extern crate serde;
 extern crate serde_json;
 extern crate smallvec;
+extern crate subtle;
 extern crate time;
 extern crate tiny_keccak;
 extern crate tempdir;
 
-extern crate ethcore_bigint as bigint;
-extern crate ethcrypto as crypto;
+extern crate ethcore_crypto as crypto;
+extern crate ethereum_types;
 extern crate ethkey as _ethkey;
 extern crate parity_wordlist;
 
@@ -42,7 +43,11 @@ extern crate log;
 #[macro_use]
 extern crate serde_derive;
 
-pub mod accounts_dir; 
+#[cfg(test)]
+#[macro_use]
+extern crate matches;
+
+pub mod accounts_dir;
 pub mod ethkey;
 
 mod account;

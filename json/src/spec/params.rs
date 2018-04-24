@@ -113,6 +113,9 @@ pub struct Params {
 	/// See main EthashParams docs.
 	#[serde(rename="maxCodeSize")]
 	pub max_code_size: Option<Uint>,
+	/// See main EthashParams docs.
+	#[serde(rename="maxCodeSizeTransition")]
+	pub max_code_size_transition: Option<Uint>,
 	/// Transaction permission contract address.
 	#[serde(rename="transactionPermissionContract")]
 	pub transaction_permission_contract: Option<Address>,
@@ -125,7 +128,7 @@ pub struct Params {
 mod tests {
 	use serde_json;
 	use uint::Uint;
-	use bigint::prelude::U256;
+	use ethereum_types::U256;
 	use spec::params::Params;
 
 	#[test]

@@ -23,10 +23,11 @@ use version::version_data;
 use crypto::{ecies, DEFAULT_MAC};
 use ethkey::{Brain, Generator};
 use ethstore::random_phrase;
-use ethsync::LightSyncProvider;
+use sync::LightSyncProvider;
 use ethcore::account_provider::AccountProvider;
 use ethcore_logger::RotatingLogger;
 use node_health::{NodeHealth, Health};
+use ethcore::ids::BlockId;
 
 use light::client::LightChainClient;
 
@@ -405,7 +406,16 @@ impl Parity for ParityClient {
 			}
 		};
 
-		Box::new(self.fetcher().header(number.unwrap_or_default().into()).map(from_encoded))
+		// Note: Here we treat `Pending` as `Latest`.
+		//       Since light clients don't produce pending blocks
+		//       (they don't have state) we can safely fallback to `Latest`.
+		let id = match number.unwrap_or_default() {
+			BlockNumber::Num(n) => BlockId::Number(n),
+			BlockNumber::Earliest => BlockId::Earliest,
+			BlockNumber::Latest | BlockNumber::Pending => BlockId::Latest,
+		};
+
+		Box::new(self.fetcher().header(id).map(from_encoded))
 	}
 
 	fn ipfs_cid(&self, content: Bytes) -> Result<String> {

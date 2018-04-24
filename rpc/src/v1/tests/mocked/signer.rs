@@ -16,16 +16,15 @@
 
 use std::sync::Arc;
 use std::str::FromStr;
-use bigint::prelude::U256;
-use util::Address;
+use ethereum_types::{U256, Address};
 use bytes::ToPretty;
 
 use ethcore::account_provider::AccountProvider;
 use ethcore::client::TestBlockChainClient;
-use ethcore::transaction::{Transaction, Action, SignedTransaction};
 use parity_reactor::EventLoop;
 use parking_lot::Mutex;
 use rlp::encode;
+use transaction::{Transaction, Action, SignedTransaction};
 
 use serde_json;
 use jsonrpc_core::IoHandler;
@@ -217,7 +216,7 @@ fn should_confirm_transaction_and_dispatch() {
 		"params":["0x1", {"gasPrice":"0x1000","gas":"0x50505"}, "test"],
 		"id":1
 	}"#;
-	let response = r#"{"jsonrpc":"2.0","result":""#.to_owned() + format!("0x{:?}", t.hash()).as_ref() + r#"","id":1}"#;
+	let response = r#"{"jsonrpc":"2.0","result":""#.to_owned() + format!("0x{:x}", t.hash()).as_ref() + r#"","id":1}"#;
 
 	// then
 	assert_eq!(tester.io.handle_request_sync(&request), Some(response.to_owned()));
@@ -262,11 +261,11 @@ fn should_alter_the_sender_and_nonce() {
 		"jsonrpc":"2.0",
 		"method":"signer_confirmRequest",
 		"params":["0x1", {"sender":""#.to_owned()
-		+ &format!("0x{:?}", address)
+		+ &format!("0x{:x}", address)
 		+ r#"","gasPrice":"0x1000","gas":"0x50505"}, "test"],
 		"id":1
 	}"#;
-	let response = r#"{"jsonrpc":"2.0","result":""#.to_owned() + &format!("0x{:?}", t.hash()) + r#"","id":1}"#;
+	let response = r#"{"jsonrpc":"2.0","result":""#.to_owned() + &format!("0x{:x}", t.hash()) + r#"","id":1}"#;
 
 	// then
 	assert_eq!(tester.io.handle_request_sync(&request), Some(response.to_owned()));
@@ -313,7 +312,7 @@ fn should_confirm_transaction_with_token() {
 		"id":1
 	}"#;
 	let response = r#"{"jsonrpc":"2.0","result":{"result":""#.to_owned() +
-		format!("0x{:?}", t.hash()).as_ref() +
+		format!("0x{:x}", t.hash()).as_ref() +
 		r#"","token":""#;
 
 	// then
@@ -362,7 +361,7 @@ fn should_confirm_transaction_with_rlp() {
 		"params":["0x1", "0x"#.to_owned() + &rlp.to_hex() + r#""],
 		"id":1
 	}"#;
-	let response = r#"{"jsonrpc":"2.0","result":""#.to_owned() + format!("0x{:?}", t.hash()).as_ref() + r#"","id":1}"#;
+	let response = r#"{"jsonrpc":"2.0","result":""#.to_owned() + format!("0x{:x}", t.hash()).as_ref() + r#"","id":1}"#;
 
 	// then
 	assert_eq!(tester.io.handle_request_sync(&request), Some(response.to_owned()));
@@ -461,18 +460,18 @@ fn should_confirm_sign_transaction_with_rlp() {
 		r#""blockHash":null,"blockNumber":null,"# +
 		&format!("\"chainId\":{},", t.chain_id().map_or("null".to_owned(), |n| format!("{}", n))) +
 		r#""condition":null,"creates":null,"# +
-		&format!("\"from\":\"0x{:?}\",", &address) +
+		&format!("\"from\":\"0x{:x}\",", &address) +
 		r#""gas":"0x989680","gasPrice":"0x1000","# +
-		&format!("\"hash\":\"0x{:?}\",", t.hash()) +
+		&format!("\"hash\":\"0x{:x}\",", t.hash()) +
 		r#""input":"0x","# +
 		r#""nonce":"0x0","# +
-		&format!("\"publicKey\":\"0x{:?}\",", t.public_key().unwrap()) +
-		&format!("\"r\":\"0x{}\",", U256::from(signature.r()).to_hex()) +
+		&format!("\"publicKey\":\"0x{:x}\",", t.public_key().unwrap()) +
+		&format!("\"r\":\"0x{:x}\",", U256::from(signature.r())) +
 		&format!("\"raw\":\"0x{}\",", rlp.to_hex()) +
-		&format!("\"s\":\"0x{}\",", U256::from(signature.s()).to_hex()) +
-		&format!("\"standardV\":\"0x{}\",", U256::from(t.standard_v()).to_hex()) +
+		&format!("\"s\":\"0x{:x}\",", U256::from(signature.s())) +
+		&format!("\"standardV\":\"0x{:x}\",", U256::from(t.standard_v())) +
 		r#""to":"0xd46e8dd67c5d32be8058bb8eb970870f07244567","transactionIndex":null,"# +
-		&format!("\"v\":\"0x{}\",", U256::from(t.original_v()).to_hex()) +
+		&format!("\"v\":\"0x{:x}\",", U256::from(t.original_v())) +
 		r#""value":"0x1""# +
 		r#"}},"id":1}"#;
 

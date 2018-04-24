@@ -16,7 +16,7 @@
 
 use std::sync::Arc;
 use std::collections::{BTreeSet, BTreeMap};
-use bigint::hash::H256;
+use ethereum_types::{H256, Address};
 use ethkey::{Public, Secret, Signature};
 use parking_lot::{Mutex, Condvar};
 use key_server_cluster::{Error, SessionId, NodeId, DocumentKeyShare, DocumentKeyShareVersion, KeyStorage};
@@ -101,7 +101,7 @@ struct NewKeyShare {
 	/// NewKeyShare: threshold.
 	pub threshold: usize,
 	/// NewKeyShare: author.
-	pub author: Public,
+	pub author: Address,
 	/// NewKeyShare: joint public.
 	pub joint_public: Public,
 	/// NewKeyShare: Common (shared) encryption point.
@@ -516,7 +516,7 @@ impl<T> SessionImpl<T> where T: SessionTransport {
 			return Ok(())
 		}
 
-		// TODO: find a way to verificate keys
+		// TODO [Trust]: find a way to verificate keys
 		Self::complete_session(&self.core, &mut *data)
 	}
 
@@ -600,7 +600,7 @@ impl<T> SessionImpl<T> where T: SessionTransport {
 			return Ok(())
 		}
 
-		// TODO: find a way to verificate keys
+		// TODO [Trust]: find a way to verificate keys
 		Self::complete_session(core, data)
 	}
 
@@ -853,7 +853,7 @@ pub mod tests {
 	use std::sync::Arc;
 	use std::collections::{VecDeque, BTreeMap, BTreeSet};
 	use ethkey::{Random, Generator, Public, KeyPair, Signature, sign};
-	use bigint::hash::H256;
+	use ethereum_types::H256;
 	use key_server_cluster::{NodeId, SessionId, Error, KeyStorage, DummyKeyStorage};
 	use key_server_cluster::cluster::Cluster;
 	use key_server_cluster::cluster::tests::DummyCluster;

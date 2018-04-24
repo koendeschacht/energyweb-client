@@ -23,13 +23,12 @@ use std::sync::{Condvar as SCondvar, Mutex as SMutex, Arc};
 use std::cmp;
 use std::collections::{VecDeque, HashSet, HashMap};
 use heapsize::HeapSizeOf;
-use bigint::prelude::U256;
-use bigint::hash::H256;
+use ethereum_types::{H256, U256};
 use parking_lot::{Condvar, Mutex, RwLock};
 use io::*;
 use error::*;
 use engines::EthEngine;
-use service::*;
+use client::ClientIoMessage;
 
 use self::kind::{BlockLike, Kind};
 
@@ -729,17 +728,17 @@ impl<K: Kind> Drop for VerificationQueue<K> {
 #[cfg(test)]
 mod tests {
 	use io::*;
-	use spec::*;
+	use spec::Spec;
 	use super::{BlockQueue, Config, State};
 	use super::kind::blocks::Unverified;
-	use tests::helpers::*;
+	use test_helpers::{get_good_dummy_block_seq, get_good_dummy_block};
 	use error::*;
 	use views::*;
 
 	// create a test block queue.
 	// auto_scaling enables verifier adjustment.
 	fn get_test_queue(auto_scale: bool) -> BlockQueue {
-		let spec = get_test_spec();
+		let spec = Spec::new_test();
 		let engine = spec.engine;
 
 		let mut config = Config::default();
@@ -828,7 +827,7 @@ mod tests {
 
 	#[test]
 	fn test_mem_limit() {
-		let spec = get_test_spec();
+		let spec = Spec::new_test();
 		let engine = spec.engine;
 		let mut config = Config::default();
 		config.max_mem_use = super::MIN_MEM_LIMIT;  // empty queue uses about 15000

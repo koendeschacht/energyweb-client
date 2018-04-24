@@ -17,8 +17,7 @@
 //! Ethereum virtual machine.
 
 extern crate bit_set;
-extern crate ethcore_util as util;
-extern crate ethcore_bigint as bigint;
+extern crate ethereum_types;
 extern crate parking_lot;
 extern crate heapsize;
 extern crate vm;
@@ -31,9 +30,6 @@ extern crate lazy_static;
 #[cfg_attr(feature = "evm-debug", macro_use)]
 extern crate log;
 
-#[cfg(feature = "jit")]
-extern crate evmjit;
-
 #[cfg(test)]
 extern crate rustc_hex;
 
@@ -44,9 +40,6 @@ pub mod interpreter;
 pub mod factory;
 mod vmtype;
 mod instructions;
-
-#[cfg(feature = "jit" )]
-mod jit;
 
 #[cfg(test)]
 mod tests;

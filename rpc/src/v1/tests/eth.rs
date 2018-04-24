@@ -19,22 +19,22 @@ use std::env;
 use std::sync::Arc;
 use std::time::Duration;
 
-use bigint::hash::H256;
-use bigint::prelude::U256;
+use ethereum_types::{U256, H256, Address};
 use ethcore::account_provider::AccountProvider;
 use ethcore::block::Block;
-use ethcore::client::{BlockChainClient, Client, ClientConfig};
+use ethcore::client::{BlockChainClient, Client, ClientConfig, ChainInfo, ImportBlock};
 use ethcore::ethereum;
 use ethcore::ids::BlockId;
-use ethcore::miner::{MinerOptions, Banning, GasPricer, MinerService, ExternalMiner, Miner, PendingSet, PrioritizationStrategy, GasLimit};
+use ethcore::miner::{MinerOptions, Banning, GasPricer, Miner, PendingSet, GasLimit};
 use ethcore::spec::{Genesis, Spec};
 use ethcore::views::BlockView;
 use ethjson::blockchain::BlockChain;
 use ethjson::state::test::ForkSpec;
 use io::IoChannel;
 use kvdb_memorydb;
+use miner::external::ExternalMiner;
+use miner::transaction_queue::PrioritizationStrategy;
 use parking_lot::Mutex;
-use util::Address;
 
 use jsonrpc_core::IoHandler;
 use v1::helpers::dispatch::FullDispatcher;
@@ -60,7 +60,6 @@ fn sync_provider() -> Arc<TestSyncProvider> {
 fn miner_service(spec: &Spec, accounts: Arc<AccountProvider>) -> Arc<Miner> {
 	Miner::new(
 		MinerOptions {
-			new_work_notify: vec![],
 			force_sealing: true,
 			reseal_on_external_tx: true,
 			reseal_on_own_tx: true,
@@ -101,7 +100,7 @@ fn make_spec(chain: &BlockChain) -> Spec {
 
 struct EthTester {
 	client: Arc<Client>,
-	_miner: Arc<MinerService>,
+	_miner: Arc<Miner>,
 	_snapshot: Arc<TestSnapshotService>,
 	accounts: Arc<AccountProvider>,
 	handler: IoHandler<Metadata>,
@@ -337,7 +336,7 @@ fn eth_transaction_count() {
 	let req_before = r#"{
 		"jsonrpc": "2.0",
 		"method": "eth_getTransactionCount",
-		"params": [""#.to_owned() + format!("0x{:?}", address).as_ref() + r#"", "latest"],
+		"params": [""#.to_owned() + format!("0x{:x}", address).as_ref() + r#"", "latest"],
 		"id": 15
 	}"#;
 
@@ -349,7 +348,7 @@ fn eth_transaction_count() {
 		"jsonrpc": "2.0",
 		"method": "eth_sendTransaction",
 		"params": [{
-			"from": ""#.to_owned() + format!("0x{:?}", address).as_ref() + r#"",
+			"from": ""#.to_owned() + format!("0x{:x}", address).as_ref() + r#"",
 			"to": "0xd46e8dd67c5d32be8058bb8eb970870f07244567",
 			"gas": "0x30000",
 			"gasPrice": "0x1",
@@ -365,7 +364,7 @@ fn eth_transaction_count() {
 	let req_after_latest = r#"{
 		"jsonrpc": "2.0",
 		"method": "eth_getTransactionCount",
-		"params": [""#.to_owned() + format!("0x{:?}", address).as_ref() + r#"", "latest"],
+		"params": [""#.to_owned() + format!("0x{:x}", address).as_ref() + r#"", "latest"],
 		"id": 17
 	}"#;
 
@@ -377,7 +376,7 @@ fn eth_transaction_count() {
 	let req_after_pending = r#"{
 		"jsonrpc": "2.0",
 		"method": "eth_getTransactionCount",
-		"params": [""#.to_owned() + format!("0x{:?}", address).as_ref() + r#"", "pending"],
+		"params": [""#.to_owned() + format!("0x{:x}", address).as_ref() + r#"", "pending"],
 		"id": 18
 	}"#;
 
@@ -403,7 +402,7 @@ fn verify_transaction_counts(name: String, chain: BlockChain) {
 			"jsonrpc": "2.0",
 			"method": "eth_getBlockTransactionCountByHash",
 			"params": [
-				""#.to_owned() + format!("0x{:?}", hash).as_ref() + r#""
+				""#.to_owned() + format!("0x{:x}", hash).as_ref() + r#""
 			],
 			"id": "# + format!("{}", *id).as_ref() + r#"
 		}"#;
@@ -463,7 +462,7 @@ fn starting_nonce_test() {
 		{
 			"jsonrpc": "2.0",
 			"method": "eth_getTransactionCount",
-			"params": [""#.to_owned() + format!("0x{:?}", address).as_ref() + r#"", "latest"],
+			"params": [""#.to_owned() + format!("0x{:x}", address).as_ref() + r#"", "latest"],
 			"id": 15
 		}
 		"#)

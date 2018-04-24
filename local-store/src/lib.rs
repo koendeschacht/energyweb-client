@@ -19,16 +19,17 @@
 use std::sync::Arc;
 use std::fmt;
 
-use ethcore::transaction::{
+use transaction::{
 	SignedTransaction, PendingTransaction, UnverifiedTransaction,
 	Condition as TransactionCondition
 };
-use ethcore::service::ClientIoMessage;
+use ethcore::client::ClientIoMessage;
 use io::IoHandler;
 use rlp::UntrustedRlp;
 use kvdb::KeyValueDB;
 
 extern crate ethcore;
+extern crate ethcore_transaction as transaction;
 extern crate ethcore_io as io;
 extern crate rlp;
 extern crate serde_json;
@@ -231,7 +232,7 @@ mod tests {
 	use super::NodeInfo;
 
 	use std::sync::Arc;
-	use ethcore::transaction::{Transaction, Condition, PendingTransaction};
+	use transaction::{Transaction, Condition, PendingTransaction};
 	use ethkey::{Brain, Generator};
 
 	// we want to test: round-trip of good transactions.

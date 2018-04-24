@@ -30,9 +30,9 @@ use engines::EthEngine;
 use header::Header;
 use ids::BlockId;
 
-use bigint::prelude::U256;
-use bigint::hash::H256;
-use util::{HashDB, DBValue};
+use ethereum_types::{H256, U256};
+use hashdb::HashDB;
+use kvdb::DBValue;
 use snappy;
 use bytes::Bytes;
 use parking_lot::Mutex;
@@ -76,6 +76,11 @@ mod traits;
 
 // Try to have chunks be around 4MB (before compression)
 const PREFERRED_CHUNK_SIZE: usize = 4 * 1024 * 1024;
+
+// Maximal chunk size (decompressed)
+// Snappy::decompressed_len estimation may sometimes yield results greater
+// than PREFERRED_CHUNK_SIZE so allow some threshold here.
+const MAX_CHUNK_SIZE: usize = PREFERRED_CHUNK_SIZE / 4 * 5;
 
 // Minimum supported state chunk version.
 const MIN_SUPPORTED_STATE_CHUNK_VERSION: u64 = 1;
@@ -125,7 +130,7 @@ pub fn take_snapshot<W: SnapshotWriter + Send>(
 	writer: W,
 	p: &Progress
 ) -> Result<(), Error> {
-	let start_header = chain.block_header(&block_at)
+	let start_header = chain.block_header_data(&block_at)
 		.ok_or(Error::InvalidStartingBlock(BlockId::Hash(block_at)))?;
 	let state_root = start_header.state_root();
 	let number = start_header.number();
@@ -138,7 +143,7 @@ pub fn take_snapshot<W: SnapshotWriter + Send>(
 	let (state_hashes, block_hashes) = scope(|scope| {
 		let writer = &writer;
 		let block_guard = scope.spawn(move || chunk_secondary(chunker, chain, block_at, writer, p));
-		let state_res = chunk_state(state_db, state_root, writer, p);
+		let state_res = chunk_state(state_db, &state_root, writer, p);
 
 		state_res.and_then(|state_hashes| {
 			block_guard.join().map(|block_hashes| (state_hashes, block_hashes))
@@ -151,7 +156,7 @@ pub fn take_snapshot<W: SnapshotWriter + Send>(
 		version: snapshot_version,
 		state_hashes: state_hashes,
 		block_hashes: block_hashes,
-		state_root: *state_root,
+		state_root: state_root,
 		block_number: number,
 		block_hash: block_at,
 	};
@@ -181,8 +186,8 @@ pub fn chunk_secondary<'a>(mut chunker: Box<SnapshotComponents>, chain: &'a Bloc
 			let size = compressed.len();
 
 			writer.lock().write_block_chunk(hash, compressed)?;
-			trace!(target: "snapshot", "wrote secondary chunk. hash: {}, size: {}, uncompressed size: {}",
-				hash.hex(), size, raw_data.len());
+			trace!(target: "snapshot", "wrote secondary chunk. hash: {:x}, size: {}, uncompressed size: {}",
+				hash, size, raw_data.len());
 
 			progress.size.fetch_add(size, Ordering::SeqCst);
 			chunk_hashes.push(hash);
@@ -481,8 +486,8 @@ pub fn verify_old_block(rng: &mut OsRng, header: &Header, engine: &EthEngine, ch
 
 	if always || rng.gen::<f32>() <= POW_VERIFY_RATE {
 		engine.verify_block_unordered(header)?;
-		match chain.block_header(header.parent_hash()) {
-			Some(parent) => engine.verify_block_family(header, &parent),
+		match chain.block_header_data(header.parent_hash()) {
+			Some(parent) => engine.verify_block_family(header, &parent.decode()),
 			None => Ok(()),
 		}
 	} else {

@@ -21,7 +21,7 @@ use std::sync::Arc;
 use bloomchain::{Number, Config as BloomConfig};
 use bloomchain::group::{BloomGroupDatabase, BloomGroupChain, GroupPosition, BloomGroup};
 use heapsize::HeapSizeOf;
-use bigint::hash::{H256, H264};
+use ethereum_types::{H256, H264};
 use kvdb::{KeyValueDB, DBTransaction};
 use parking_lot::RwLock;
 use header::BlockNumber;
@@ -101,7 +101,12 @@ enum CacheId {
 	Bloom(TraceGroupPosition),
 }
 
-/// Trace database.
+/// Database to store transaction execution trace.
+///
+/// Whenever a transaction is executed by EVM it's execution trace is stored
+/// in trace database. Each trace has information, which contracts have been
+/// touched, which have been created during the execution of transaction, and
+/// which calls failed.
 pub struct TraceDB<T> where T: DatabaseExtras {
 	// cache
 	traces: RwLock<HashMap<H256, FlatBlockTraces>>,
@@ -279,8 +284,6 @@ impl<T> TraceDatabase for TraceDB<T> where T: DatabaseExtras {
 				} else {
 					self.traces(block_hash).expect("Traces database is incomplete.").bloom()
 				})
-				.map(blooms::Bloom::from)
-				.map(Into::into)
 				.collect();
 
 			let chain = BloomGroupChain::new(self.bloom_config, self);
@@ -412,9 +415,7 @@ impl<T> TraceDatabase for TraceDB<T> where T: DatabaseExtras {
 mod tests {
 	use std::collections::HashMap;
 	use std::sync::Arc;
-	use bigint::prelude::U256;
-	use bigint::hash::H256;
-	use util::Address;
+	use ethereum_types::{H256, U256, Address};
 	use kvdb::{DBTransaction, KeyValueDB};
 	use kvdb_memorydb;
 	use header::BlockNumber;
