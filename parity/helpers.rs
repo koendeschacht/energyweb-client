@@ -18,19 +18,22 @@ use std::io;
 use std::io::{Write, BufReader, BufRead};
 use std::time::Duration;
 use std::fs::File;
-use bigint::prelude::U256;
-use bigint::hash::clean_0x;
-use util::Address;
-use kvdb_rocksdb::CompactionProfile;
+use std::sync::Arc;
+use std::path::Path;
+use ethereum_types::{U256, clean_0x, Address};
 use journaldb::Algorithm;
 use ethcore::client::{Mode, BlockId, VMType, DatabaseCompactionProfile, ClientConfig, VerifierType};
-use ethcore::miner::{PendingSet, GasLimit, PrioritizationStrategy};
+use ethcore::miner::{PendingSet, GasLimit};
+use ethcore::db::NUM_COLUMNS;
+use miner::transaction_queue::PrioritizationStrategy;
 use cache::CacheConfig;
 use dir::DatabaseDirectories;
 use dir::helpers::replace_home;
 use upgrade::{upgrade, upgrade_data_paths};
 use migration::migrate;
-use ethsync::{validate_node_url, self};
+use sync::{validate_node_url, self};
+use kvdb::{KeyValueDB, KeyValueDBHandler};
+use kvdb_rocksdb::{Database, DatabaseConfig, CompactionProfile};
 use path;
 
 pub fn to_duration(s: &str) -> Result<Duration, String> {
@@ -171,7 +174,7 @@ pub fn to_bootnodes(bootnodes: &Option<String>) -> Result<Vec<String>, String> {
 		Some(ref x) if !x.is_empty() => x.split(',').map(|s| {
 			match validate_node_url(s).map(Into::into) {
 				None => Ok(s.to_owned()),
-				Some(ethsync::ErrorKind::AddressResolve(_)) => Err(format!("Failed to resolve hostname of a boot node: {}", s)),
+				Some(sync::ErrorKind::AddressResolve(_)) => Err(format!("Failed to resolve hostname of a boot node: {}", s)),
 				Some(_) => Err(format!("Invalid node address format given for a boot node: {}", s)),
 			}
 		}).collect(),
@@ -181,8 +184,8 @@ pub fn to_bootnodes(bootnodes: &Option<String>) -> Result<Vec<String>, String> {
 }
 
 #[cfg(test)]
-pub fn default_network_config() -> ::ethsync::NetworkConfiguration {
-	use ethsync::{NetworkConfiguration};
+pub fn default_network_config() -> ::sync::NetworkConfiguration {
+	use sync::{NetworkConfiguration};
 	use super::network::IpFilter;
 	NetworkConfiguration {
 		config_path: Some(replace_home(&::dir::default_data_path(), "$BASE/network")),
@@ -256,6 +259,52 @@ pub fn to_client_config(
 	client_config
 }
 
+// We assume client db has similar config as restoration db.
+pub fn client_db_config(client_path: &Path, client_config: &ClientConfig) -> DatabaseConfig {
+	let mut client_db_config = DatabaseConfig::with_columns(NUM_COLUMNS);
+
+	client_db_config.memory_budget = client_config.db_cache_size;
+	client_db_config.compaction = compaction_profile(&client_config.db_compaction, &client_path);
+	client_db_config.wal = client_config.db_wal;
+
+	client_db_config
+}
+
+pub fn open_client_db(client_path: &Path, client_db_config: &DatabaseConfig) -> Result<Arc<KeyValueDB>, String> {
+	let client_db = Arc::new(Database::open(
+		&client_db_config,
+		&client_path.to_str().expect("DB path could not be converted to string.")
+	).map_err(|e| format!("Client service database error: {:?}", e))?);
+
+	Ok(client_db)
+}
+
+pub fn restoration_db_handler(client_db_config: DatabaseConfig) -> Box<KeyValueDBHandler> {
+	use kvdb::Error;
+
+	struct RestorationDBHandler {
+		config: DatabaseConfig,
+	}
+
+	impl KeyValueDBHandler for RestorationDBHandler {
+		fn open(&self, db_path: &Path) -> Result<Arc<KeyValueDB>, Error> {
+			Ok(Arc::new(Database::open(&self.config, &db_path.to_string_lossy())?))
+		}
+	}
+
+	Box::new(RestorationDBHandler {
+		config: client_db_config,
+	})
+}
+
+pub fn compaction_profile(profile: &DatabaseCompactionProfile, db_path: &Path) -> CompactionProfile {
+	match profile {
+		&DatabaseCompactionProfile::Auto => CompactionProfile::auto(db_path),
+		&DatabaseCompactionProfile::SSD => CompactionProfile::ssd(),
+		&DatabaseCompactionProfile::HDD => CompactionProfile::hdd(),
+	}
+}
+
 pub fn execute_upgrades(
 	base_path: &str,
 	dirs: &DatabaseDirectories,
@@ -276,7 +325,7 @@ pub fn execute_upgrades(
 	}
 
 	let client_path = dirs.db_path(pruning);
-	migrate(&client_path, pruning, compaction_profile).map_err(|e| format!("{}", e))
+	migrate(&client_path, compaction_profile).map_err(|e| format!("{}", e))
 }
 
 /// Prompts user asking for password.
@@ -329,8 +378,8 @@ mod tests {
 	use std::time::Duration;
 	use std::fs::File;
 	use std::io::Write;
-	use devtools::RandomTempPath;
-	use bigint::prelude::U256;
+	use tempdir::TempDir;
+	use ethereum_types::U256;
 	use ethcore::client::{Mode, BlockId};
 	use ethcore::miner::PendingSet;
 	use super::{to_duration, to_mode, to_block_id, to_u256, to_pending_set, to_address, to_addresses, to_price, geth_ipc_path, to_bootnodes, password_from_file};
@@ -418,15 +467,17 @@ mod tests {
 
 	#[test]
 	fn test_password() {
-		let path = RandomTempPath::new();
-		let mut file = File::create(path.as_path()).unwrap();
+		let tempdir = TempDir::new("").unwrap();
+		let path = tempdir.path().join("file");
+		let mut file = File::create(&path).unwrap();
 		file.write_all(b"a bc ").unwrap();
-		assert_eq!(password_from_file(path.as_str().into()).unwrap().as_bytes(), b"a bc");
+		assert_eq!(password_from_file(path.to_str().unwrap().into()).unwrap().as_bytes(), b"a bc");
 	}
 
 	#[test]
 	fn test_password_multiline() {
-		let path = RandomTempPath::new();
+		let tempdir = TempDir::new("").unwrap();
+		let path = tempdir.path().join("file");
 		let mut file = File::create(path.as_path()).unwrap();
 		file.write_all(br#"    password with trailing whitespace
 those passwords should be
@@ -434,7 +485,7 @@ ignored
 but the first password is trimmed
 
 "#).unwrap();
-		assert_eq!(&password_from_file(path.as_str().into()).unwrap(), "password with trailing whitespace");
+		assert_eq!(&password_from_file(path.to_str().unwrap().into()).unwrap(), "password with trailing whitespace");
 	}
 
 	#[test]

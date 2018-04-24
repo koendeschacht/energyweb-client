@@ -14,22 +14,20 @@
 // You should have received a copy of the GNU General Public License
 // along with Parity.  If not, see <http://www.gnu.org/licenses/>.
 
+use std::cmp::{max, min};
 use std::time::Duration;
 use std::io::Read;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::collections::BTreeMap;
-use std::cmp::max;
 use std::str::FromStr;
 use cli::{Args, ArgsError};
 use hash::keccak;
-use bigint::prelude::U256;
-use bigint::hash::H256;
-use util::Address;
+use ethereum_types::{U256, H256, Address};
 use parity_version::{version_data, version};
 use bytes::Bytes;
 use ansi_term::Colour;
-use ethsync::{NetworkConfiguration, validate_node_url, self};
+use sync::{NetworkConfiguration, validate_node_url, self};
 use ethcore::ethstore::ethkey::{Secret, Public};
 use ethcore::client::{VMType};
 use ethcore::miner::{MinerOptions, Banning, StratumOptions};
@@ -40,21 +38,26 @@ use rpc_apis::ApiSet;
 use parity_rpc::NetworkSettings;
 use cache::CacheConfig;
 use helpers::{to_duration, to_mode, to_block_id, to_u256, to_pending_set, to_price, geth_ipc_path, parity_ipc_path,
-to_bootnodes, to_addresses, to_address, to_gas_limit, to_queue_strategy};
+to_bootnodes, to_addresses, to_address, to_gas_limit, to_queue_strategy, passwords_from_files};
 use dir::helpers::{replace_home, replace_home_and_local};
 use params::{ResealPolicy, AccountsConfig, GasPricerConfig, MinerExtras, SpecType};
 use ethcore_logger::Config as LogConfig;
 use dir::{self, Directories, default_hypervisor_path, default_local_path, default_data_path};
 use dapps::Configuration as DappsConfiguration;
 use ipfs::Configuration as IpfsConfiguration;
+use ethcore_private_tx::{ProviderConfig, EncryptorConfig};
 use secretstore::{NodeSecretKey, Configuration as SecretStoreConfiguration, ContractAddress as SecretStoreContractAddress};
 use updater::{UpdatePolicy, UpdateFilter, ReleaseTrack};
 use run::RunCmd;
 use blockchain::{BlockchainCmd, ImportBlockchain, ExportBlockchain, KillBlockchain, ExportState, DataFormat};
+use export_hardcoded_sync::ExportHsyncCmd;
 use presale::ImportWallet;
 use account::{AccountCmd, NewAccount, ListAccounts, ImportAccounts, ImportFromGethAccounts};
 use snapshot::{self, SnapshotCommand};
 use network::{IpFilter};
+
+const DEFAULT_MAX_PEERS: u16 = 50;
+const DEFAULT_MIN_PEERS: u16 = 25;
 
 #[derive(Debug, PartialEq)]
 pub enum Cmd {
@@ -81,6 +84,7 @@ pub enum Cmd {
 	},
 	Snapshot(SnapshotCommand),
 	Hash(Option<String>),
+	ExportHardcodedSync(ExportHsyncCmd),
 }
 
 pub struct Execute {
@@ -145,7 +149,7 @@ impl Configuration {
 			if self.args.cmd_signer_new_token {
 				Cmd::SignerToken(ws_conf, ui_conf, logger_config.clone())
 			} else if self.args.cmd_signer_sign {
-				let pwfile = self.args.arg_password.first().map(|pwfile| {
+				let pwfile = self.accounts_config()?.password_files.first().map(|pwfile| {
 					PathBuf::from(pwfile)
 				});
 				Cmd::SignerSign {
@@ -182,7 +186,7 @@ impl Configuration {
 					iterations: self.args.arg_keys_iterations,
 					path: dirs.keys,
 					spec: spec,
-					password_file: self.args.arg_password.first().map(|x| x.to_owned()),
+					password_file: self.accounts_config()?.password_files.first().map(|x| x.to_owned()),
 				};
 				AccountCmd::New(new_acc)
 			} else if self.args.cmd_account_list {
@@ -216,8 +220,8 @@ impl Configuration {
 				iterations: self.args.arg_keys_iterations,
 				path: dirs.keys,
 				spec: spec,
-				wallet_path: self.args.arg_wallet_import_path.unwrap().clone(),
-				password_file: self.args.arg_password.first().map(|x| x.to_owned()),
+				wallet_path: self.args.arg_wallet_import_path.clone().unwrap(),
+				password_file: self.accounts_config()?.password_files.first().map(|x| x.to_owned()),
 			};
 			Cmd::ImportPresaleWallet(presale_cmd)
 		} else if self.args.cmd_import {
@@ -319,6 +323,16 @@ impl Configuration {
 				block_at: to_block_id("latest")?, // unimportant.
 			};
 			Cmd::Snapshot(restore_cmd)
+		} else if self.args.cmd_export_hardcoded_sync {
+			let export_hs_cmd = ExportHsyncCmd {
+				cache_config: cache_config,
+				dirs: dirs,
+				spec: spec,
+				pruning: pruning,
+				compaction: compaction,
+				wal: wal,
+			};
+			Cmd::ExportHardcodedSync(export_hs_cmd)
 		} else {
 			let daemon = if self.args.cmd_daemon {
 				Some(self.args.arg_daemon_pid_file.clone().expect("CLI argument is required; qed"))
@@ -328,6 +342,7 @@ impl Configuration {
 
 			let verifier_settings = self.verifier_settings();
 			let whisper_config = self.whisper_config();
+			let (private_provider_conf, private_enc_conf, private_tx_enabled) = self.private_provider_config()?;
 
 			let run_cmd = RunCmd {
 				cache_config: cache_config,
@@ -339,6 +354,7 @@ impl Configuration {
 				daemon: daemon,
 				logger_config: logger_config.clone(),
 				miner_options: self.miner_options()?,
+				work_notify: self.work_notify(),
 				gas_price_percentile: self.args.arg_gas_price_percentile,
 				ntp_servers: self.ntp_servers(),
 				ws_conf: ws_conf,
@@ -358,6 +374,7 @@ impl Configuration {
 				wal: wal,
 				vm_type: vm_type,
 				warp_sync: warp_sync,
+				warp_barrier: self.args.arg_warp_barrier,
 				public_node: public_node,
 				geth_compatibility: geth_compatibility,
 				net_settings: self.network_settings()?,
@@ -365,6 +382,9 @@ impl Configuration {
 				ipfs_conf: ipfs_conf,
 				ui_conf: ui_conf,
 				secretstore_conf: secretstore_conf,
+				private_provider_conf: private_provider_conf,
+				private_encryptor_conf: private_enc_conf,
+				private_tx_enabled,
 				dapp: self.dapp_to_open()?,
 				ui: self.args.cmd_ui,
 				name: self.args.arg_identity,
@@ -377,6 +397,7 @@ impl Configuration {
 				light: self.args.flag_light,
 				no_persistent_txqueue: self.args.flag_no_persistent_txqueue,
 				whisper: whisper_config,
+				no_hardcoded_sync: self.args.flag_no_hardcoded_sync,
 			};
 			Cmd::Run(run_cmd)
 		};
@@ -388,11 +409,7 @@ impl Configuration {
 	}
 
 	fn vm_type(&self) -> Result<VMType, String> {
-		if self.args.flag_jitvm {
-			VMType::jit().ok_or("Parity is built without the JIT EVM.".into())
-		} else {
-			Ok(VMType::Interpreter)
-		}
+		Ok(VMType::Interpreter)
 	}
 
 	fn miner_extras(&self) -> Result<MinerExtras, String> {
@@ -440,7 +457,7 @@ impl Configuration {
 		LogConfig {
 			mode: self.args.arg_logging.clone(),
 			color: !self.args.flag_no_color && !cfg!(windows),
-			file: self.args.arg_log_file.clone(),
+			file: self.args.arg_log_file.as_ref().map(|log_file| replace_home(&self.directories().base, log_file)),
 		}
 	}
 
@@ -457,8 +474,9 @@ impl Configuration {
 	}
 
 	fn max_peers(&self) -> u32 {
-		let peers = self.args.arg_max_peers as u32;
-		max(self.min_peers(), peers)
+		self.args.arg_max_peers
+			.or(max(self.args.arg_min_peers, Some(DEFAULT_MAX_PEERS)))
+			.unwrap_or(DEFAULT_MAX_PEERS) as u32
 	}
 
 	fn ip_filter(&self) -> Result<IpFilter, String> {
@@ -469,7 +487,9 @@ impl Configuration {
 	}
 
 	fn min_peers(&self) -> u32 {
-		self.args.arg_peers.unwrap_or(self.args.arg_min_peers) as u32
+		self.args.arg_min_peers
+			.or(min(self.args.arg_max_peers, Some(DEFAULT_MIN_PEERS)))
+			.unwrap_or(DEFAULT_MIN_PEERS) as u32
 	}
 
 	fn max_pending_peers(&self) -> u32 {
@@ -489,7 +509,7 @@ impl Configuration {
 			iterations: self.args.arg_keys_iterations,
 			refresh_time: self.args.arg_accounts_refresh,
 			testnet: self.args.flag_testnet,
-			password_files: self.args.arg_password.clone(),
+			password_files: self.args.arg_password.iter().map(|s| replace_home(&self.directories().base, s)).collect(),
 			unlocked_accounts: to_addresses(&self.args.arg_unlock)?,
 			enable_hardware_wallets: !self.args.flag_no_hardware_wallets,
 			enable_fast_unlock: self.args.flag_fast_unlock,
@@ -518,7 +538,6 @@ impl Configuration {
 		let reseal = self.args.arg_reseal_on_txs.parse::<ResealPolicy>()?;
 
 		let options = MinerOptions {
-			new_work_notify: self.work_notify(),
 			force_sealing: self.args.flag_force_sealing,
 			reseal_on_external_tx: reseal.external,
 			reseal_on_own_tx: reseal.own,
@@ -562,11 +581,13 @@ impl Configuration {
 	}
 
 	fn ui_config(&self) -> UiConfiguration {
+		let ui = self.ui_enabled();
 		UiConfiguration {
-			enabled: self.ui_enabled(),
+			enabled: ui.enabled,
 			interface: self.ui_interface(),
 			port: self.ui_port(),
 			hosts: self.ui_hosts(),
+			info_page_only: ui.info_page_only,
 		}
 	}
 
@@ -615,7 +636,12 @@ impl Configuration {
 			enabled: self.secretstore_enabled(),
 			http_enabled: self.secretstore_http_enabled(),
 			acl_check_enabled: self.secretstore_acl_check_enabled(),
+			auto_migrate_enabled: self.secretstore_auto_migrate_enabled(),
 			service_contract_address: self.secretstore_service_contract_address()?,
+			service_contract_srv_gen_address: self.secretstore_service_contract_srv_gen_address()?,
+			service_contract_srv_retr_address: self.secretstore_service_contract_srv_retr_address()?,
+			service_contract_doc_store_address: self.secretstore_service_contract_doc_store_address()?,
+			service_contract_doc_sretr_address: self.secretstore_service_contract_doc_sretr_address()?,
 			self_secret: self.secretstore_self_secret()?,
 			nodes: self.secretstore_nodes()?,
 			interface: self.secretstore_interface(),
@@ -704,15 +730,17 @@ impl Configuration {
 
 		match self.args.arg_reserved_peers {
 			Some(ref path) => {
+				let path = replace_home(&self.directories().base, path);
+
 				let mut buffer = String::new();
-				let mut node_file = File::open(path).map_err(|e| format!("Error opening reserved nodes file: {}", e))?;
+				let mut node_file = File::open(&path).map_err(|e| format!("Error opening reserved nodes file: {}", e))?;
 				node_file.read_to_string(&mut buffer).map_err(|_| "Error reading reserved node file")?;
 				let lines = buffer.lines().map(|s| s.trim().to_owned()).filter(|s| !s.is_empty() && !s.starts_with("#")).collect::<Vec<_>>();
 
 				for line in &lines {
 					match validate_node_url(line).map(Into::into) {
 						None => continue,
-						Some(ethsync::ErrorKind::AddressResolve(_)) => return Err(format!("Failed to resolve hostname of a boot node: {}", line)),
+						Some(sync::ErrorKind::AddressResolve(_)) => return Err(format!("Failed to resolve hostname of a boot node: {}", line)),
 						Some(_) => return Err(format!("Invalid node address format given for a boot node: {}", line)),
 					}
 				}
@@ -892,6 +920,12 @@ impl Configuration {
 		let ui = self.ui_config();
 		let http = self.http_config()?;
 
+		let support_token_api =
+			// never enabled for public node
+			!self.args.flag_public_node
+			// enabled when not unlocking unless the ui is forced
+			&& (self.args.arg_unlock.is_none() || ui.enabled);
+
 		let conf = WsConfiguration {
 			enabled: self.ws_enabled(),
 			interface: self.ws_interface(),
@@ -900,12 +934,36 @@ impl Configuration {
 			hosts: self.ws_hosts(),
 			origins: self.ws_origins(),
 			signer_path: self.directories().signer.into(),
-			support_token_api: !self.args.flag_public_node,
+			support_token_api,
 			ui_address: ui.address(),
 			dapps_address: http.address(),
+			max_connections: self.args.arg_ws_max_connections,
 		};
 
 		Ok(conf)
+	}
+
+	fn private_provider_config(&self) -> Result<(ProviderConfig, EncryptorConfig, bool), String> {
+		let provider_conf = ProviderConfig {
+			validator_accounts: to_addresses(&self.args.arg_private_validators)?,
+			signer_account: self.args.arg_private_signer.clone().and_then(|account| to_address(Some(account)).ok()),
+			passwords: match self.args.arg_private_passwords.clone() {
+				Some(file) => passwords_from_files(&vec![file].as_slice())?,
+				None => Vec::new(),
+			},
+		};
+
+		let encryptor_conf = EncryptorConfig {
+			base_url: self.args.arg_private_sstore_url.clone(),
+			threshold: self.args.arg_private_sstore_threshold.unwrap_or(0),
+			key_server_account: self.args.arg_private_account.clone().and_then(|account| to_address(Some(account)).ok()),
+			passwords: match self.args.arg_private_passwords.clone() {
+				Some(file) => passwords_from_files(&vec![file].as_slice())?,
+				None => Vec::new(),
+			},
+		};
+
+		Ok((provider_conf, encryptor_conf, self.args.flag_private_enabled))
 	}
 
 	fn network_settings(&self) -> Result<NetworkSettings, String> {
@@ -940,6 +998,9 @@ impl Configuration {
 				_ => return Err("Invalid value for `--releases-track`. See `--help` for more information.".into()),
 			},
 			path: default_hypervisor_path(),
+			max_size: 128 * 1024 * 1024,
+			max_delay: self.args.arg_auto_update_delay as u64,
+			frequency: self.args.arg_auto_update_check_frequency as u64,
 		})
 	}
 
@@ -1093,24 +1154,46 @@ impl Configuration {
 		!self.args.flag_no_secretstore_acl_check
 	}
 
-	fn secretstore_service_contract_address(&self) -> Result<Option<SecretStoreContractAddress>, String> {
-		Ok(match self.args.arg_secretstore_contract.as_ref() {
-			"none" => None,
-			"registry" => Some(SecretStoreContractAddress::Registry),
-			a => Some(SecretStoreContractAddress::Address(a.parse().map_err(|e| format!("{}", e))?)),
-		})
+	fn secretstore_auto_migrate_enabled(&self) -> bool {
+		!self.args.flag_no_secretstore_auto_migrate
 	}
 
-	fn ui_enabled(&self) -> bool {
+	fn secretstore_service_contract_address(&self) -> Result<Option<SecretStoreContractAddress>, String> {
+		into_secretstore_service_contract_address(self.args.arg_secretstore_contract.as_ref())
+	}
+
+	fn secretstore_service_contract_srv_gen_address(&self) -> Result<Option<SecretStoreContractAddress>, String> {
+		into_secretstore_service_contract_address(self.args.arg_secretstore_srv_gen_contract.as_ref())
+	}
+
+	fn secretstore_service_contract_srv_retr_address(&self) -> Result<Option<SecretStoreContractAddress>, String> {
+		into_secretstore_service_contract_address(self.args.arg_secretstore_srv_retr_contract.as_ref())
+	}
+
+	fn secretstore_service_contract_doc_store_address(&self) -> Result<Option<SecretStoreContractAddress>, String> {
+		into_secretstore_service_contract_address(self.args.arg_secretstore_doc_store_contract.as_ref())
+	}
+
+	fn secretstore_service_contract_doc_sretr_address(&self) -> Result<Option<SecretStoreContractAddress>, String> {
+		into_secretstore_service_contract_address(self.args.arg_secretstore_doc_sretr_contract.as_ref())
+	}
+
+	fn ui_enabled(&self) -> UiEnabled {
 		if self.args.flag_force_ui {
-			return true;
+			return UiEnabled {
+				enabled: true,
+				info_page_only: false,
+			};
 		}
 
 		let ui_disabled = self.args.arg_unlock.is_some() ||
 			self.args.flag_geth ||
 			self.args.flag_no_ui;
 
-		!ui_disabled && cfg!(feature = "ui-enabled")
+		return UiEnabled {
+			enabled: (self.args.cmd_ui || !ui_disabled) && cfg!(feature = "ui-enabled"),
+			info_page_only: !self.args.cmd_ui,
+		}
 	}
 
 	fn verifier_settings(&self) -> VerifierSettings {
@@ -1131,15 +1214,30 @@ impl Configuration {
 	}
 }
 
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+struct UiEnabled {
+	pub enabled: bool,
+	pub info_page_only: bool,
+}
+
+fn into_secretstore_service_contract_address(s: &str) -> Result<Option<SecretStoreContractAddress>, String> {
+	match s {
+		"none" => Ok(None),
+		"registry" => Ok(Some(SecretStoreContractAddress::Registry)),
+		a => Ok(Some(SecretStoreContractAddress::Address(a.parse().map_err(|e| format!("{}", e))?))),
+	}
+}
+
 #[cfg(test)]
 mod tests {
 	use std::io::Write;
-	use std::fs::{File, create_dir};
+	use std::fs::File;
 	use std::str::FromStr;
 
-	use devtools::{RandomTempPath};
+	use tempdir::TempDir;
 	use ethcore::client::{VMType, BlockId};
-	use ethcore::miner::{MinerOptions, PrioritizationStrategy};
+	use ethcore::miner::MinerOptions;
+	use miner::transaction_queue::PrioritizationStrategy;
 	use parity_rpc::NetworkSettings;
 	use updater::{UpdatePolicy, UpdateFilter, ReleaseTrack};
 
@@ -1331,22 +1429,35 @@ mod tests {
 			interface: "127.0.0.1".into(),
 			port: 8546,
 			apis: ApiSet::UnsafeContext,
-			origins: Some(vec!["chrome-extension://*".into(), "moz-extension://*".into()]),
+			origins: Some(vec!["parity://*".into(),"chrome-extension://*".into(), "moz-extension://*".into()]),
 			hosts: Some(vec![]),
 			signer_path: expected.into(),
 			ui_address: Some("127.0.0.1:8180".into()),
 			dapps_address: Some("127.0.0.1:8545".into()),
-			support_token_api: true
+			support_token_api: true,
+			max_connections: 100,
 		}, UiConfiguration {
 			enabled: true,
 			interface: "127.0.0.1".into(),
 			port: 8180,
 			hosts: Some(vec![]),
+			info_page_only: true,
 		}, LogConfig {
             color: true,
             mode: None,
             file: None,
         } ));
+	}
+
+	#[test]
+	fn test_ws_max_connections() {
+		let args = vec!["parity", "--ws-max-connections", "1"];
+		let conf = parse(&args);
+
+		assert_eq!(conf.ws_config().unwrap(), WsConfiguration {
+			max_connections: 1,
+			..Default::default()
+		});
 	}
 
 	#[test]
@@ -1377,10 +1488,20 @@ mod tests {
 			network_id: None,
 			public_node: false,
 			warp_sync: true,
+			warp_barrier: None,
 			acc_conf: Default::default(),
 			gas_pricer_conf: Default::default(),
 			miner_extras: Default::default(),
-			update_policy: UpdatePolicy { enable_downloading: true, require_consensus: true, filter: UpdateFilter::Critical, track: ReleaseTrack::Unknown, path: default_hypervisor_path() },
+			update_policy: UpdatePolicy {
+				enable_downloading: true,
+				require_consensus: true,
+				filter: UpdateFilter::Critical,
+				track: ReleaseTrack::Unknown,
+				path: default_hypervisor_path(),
+				max_size: 128 * 1024 * 1024,
+				max_delay: 100,
+				frequency: 20,
+			},
 			mode: Default::default(),
 			tracing: Default::default(),
 			compaction: Default::default(),
@@ -1392,6 +1513,9 @@ mod tests {
 			ipfs_conf: Default::default(),
 			ui_conf: Default::default(),
 			secretstore_conf: Default::default(),
+			private_provider_conf: Default::default(),
+			private_encryptor_conf: Default::default(),
+			private_tx_enabled: false,
 			ui: false,
 			dapp: None,
 			name: "".into(),
@@ -1404,8 +1528,10 @@ mod tests {
 			verifier_settings: Default::default(),
 			serve_light: true,
 			light: false,
+			no_hardcoded_sync: false,
 			no_persistent_txqueue: false,
 			whisper: Default::default(),
+			work_notify: Vec::new(),
 		};
 		expected.secretstore_conf.enabled = cfg!(feature = "secretstore");
 		expected.secretstore_conf.http_enabled = cfg!(feature = "secretstore");
@@ -1444,14 +1570,41 @@ mod tests {
 	fn should_parse_updater_options() {
 		// when
 		let conf0 = parse(&["parity", "--release-track=testing"]);
-		let conf1 = parse(&["parity", "--auto-update", "all", "--no-consensus"]);
-		let conf2 = parse(&["parity", "--no-download", "--auto-update=all", "--release-track=beta"]);
+		let conf1 = parse(&["parity", "--auto-update", "all", "--no-consensus", "--auto-update-delay", "300"]);
+		let conf2 = parse(&["parity", "--no-download", "--auto-update=all", "--release-track=beta", "--auto-update-delay=300", "--auto-update-check-frequency=100"]);
 		let conf3 = parse(&["parity", "--auto-update=xxx"]);
 
 		// then
-		assert_eq!(conf0.update_policy().unwrap(), UpdatePolicy{enable_downloading: true, require_consensus: true, filter: UpdateFilter::Critical, track: ReleaseTrack::Testing, path: default_hypervisor_path()});
-		assert_eq!(conf1.update_policy().unwrap(), UpdatePolicy{enable_downloading: true, require_consensus: false, filter: UpdateFilter::All, track: ReleaseTrack::Unknown, path: default_hypervisor_path()});
-		assert_eq!(conf2.update_policy().unwrap(), UpdatePolicy{enable_downloading: false, require_consensus: true, filter: UpdateFilter::All, track: ReleaseTrack::Beta, path: default_hypervisor_path()});
+		assert_eq!(conf0.update_policy().unwrap(), UpdatePolicy {
+			enable_downloading: true,
+			require_consensus: true,
+			filter: UpdateFilter::Critical,
+			track: ReleaseTrack::Testing,
+			path: default_hypervisor_path(),
+			max_size: 128 * 1024 * 1024,
+			max_delay: 100,
+			frequency: 20,
+		});
+		assert_eq!(conf1.update_policy().unwrap(), UpdatePolicy {
+			enable_downloading: true,
+			require_consensus: false,
+			filter: UpdateFilter::All,
+			track: ReleaseTrack::Unknown,
+			path: default_hypervisor_path(),
+			max_size: 128 * 1024 * 1024,
+			max_delay: 300,
+			frequency: 20,
+		});
+		assert_eq!(conf2.update_policy().unwrap(), UpdatePolicy {
+			enable_downloading: false,
+			require_consensus: true,
+			filter: UpdateFilter::All,
+			track: ReleaseTrack::Beta,
+			path: default_hypervisor_path(),
+			max_size: 128 * 1024 * 1024,
+			max_delay: 300,
+			frequency: 100,
+		});
 		assert!(conf3.update_policy().is_err());
 	}
 
@@ -1560,10 +1713,26 @@ mod tests {
 		// when
 		let conf0 = parse(&["parity", "--geth"]);
 		let conf1 = parse(&["parity", "--geth", "--force-ui"]);
+		let conf2 = parse(&["parity", "--geth", "ui"]);
+		let conf3 = parse(&["parity"]);
 
 		// then
-		assert_eq!(conf0.ui_enabled(), false);
-		assert_eq!(conf1.ui_enabled(), true);
+		assert_eq!(conf0.ui_enabled(), UiEnabled {
+			enabled: false,
+			info_page_only: true,
+		});
+		assert_eq!(conf1.ui_enabled(), UiEnabled {
+			enabled: true,
+			info_page_only: false,
+		});
+		assert_eq!(conf2.ui_enabled(), UiEnabled {
+			enabled: true,
+			info_page_only: false,
+		});
+		assert_eq!(conf3.ui_enabled(), UiEnabled {
+			enabled: true,
+			info_page_only: true,
+		});
 	}
 
 	#[test]
@@ -1574,7 +1743,10 @@ mod tests {
 		let conf0 = parse(&["parity", "--unlock", "0x0"]);
 
 		// then
-		assert_eq!(conf0.ui_enabled(), false);
+		assert_eq!(conf0.ui_enabled(), UiEnabled {
+			enabled: false,
+			info_page_only: true,
+		});
 	}
 
 	#[test]
@@ -1586,6 +1758,8 @@ mod tests {
 		let conf1 = parse(&["parity", "--ui-path=signer", "--ui-no-validation"]);
 		let conf2 = parse(&["parity", "--ui-path=signer", "--ui-port", "3123"]);
 		let conf3 = parse(&["parity", "--ui-path=signer", "--ui-interface", "test"]);
+		let conf4 = parse(&["parity", "--ui-path=signer", "--force-ui"]);
+		let conf5 = parse(&["parity", "--ui-path=signer", "ui"]);
 
 		// then
 		assert_eq!(conf0.directories().signer, "signer".to_owned());
@@ -1594,69 +1768,92 @@ mod tests {
 			interface: "127.0.0.1".into(),
 			port: 8180,
 			hosts: Some(vec![]),
+			info_page_only: true,
 		});
-		assert!(conf0.ws_config().unwrap().hosts.is_some());
+
+		assert!(conf1.ws_config().unwrap().hosts.is_some());
+		assert_eq!(conf1.ws_config().unwrap().origins, None);
 		assert_eq!(conf1.directories().signer, "signer".to_owned());
 		assert_eq!(conf1.ui_config(), UiConfiguration {
 			enabled: true,
 			interface: "127.0.0.1".into(),
 			port: 8180,
 			hosts: Some(vec![]),
+			info_page_only: true,
 		});
 		assert_eq!(conf1.dapps_config().extra_embed_on, vec![("127.0.0.1".to_owned(), 3000)]);
-		assert_eq!(conf1.ws_config().unwrap().origins, None);
+
+		assert!(conf2.ws_config().unwrap().hosts.is_some());
 		assert_eq!(conf2.directories().signer, "signer".to_owned());
 		assert_eq!(conf2.ui_config(), UiConfiguration {
 			enabled: true,
 			interface: "127.0.0.1".into(),
 			port: 3123,
 			hosts: Some(vec![]),
+			info_page_only: true,
 		});
-		assert!(conf2.ws_config().unwrap().hosts.is_some());
+
+		assert!(conf3.ws_config().unwrap().hosts.is_some());
 		assert_eq!(conf3.directories().signer, "signer".to_owned());
 		assert_eq!(conf3.ui_config(), UiConfiguration {
 			enabled: true,
 			interface: "test".into(),
 			port: 8180,
 			hosts: Some(vec![]),
+			info_page_only: true,
 		});
-		assert!(conf3.ws_config().unwrap().hosts.is_some());
+
+		assert!(conf4.ws_config().unwrap().hosts.is_some());
+		assert_eq!(conf4.directories().signer, "signer".to_owned());
+		assert_eq!(conf4.ui_config(), UiConfiguration {
+			enabled: true,
+			interface: "127.0.0.1".into(),
+			port: 8180,
+			hosts: Some(vec![]),
+			info_page_only: false,
+		});
+
+		assert!(conf5.ws_config().unwrap().hosts.is_some());
+		assert_eq!(conf5.directories().signer, "signer".to_owned());
+		assert_eq!(conf5.ui_config(), UiConfiguration {
+			enabled: true,
+			interface: "127.0.0.1".into(),
+			port: 8180,
+			hosts: Some(vec![]),
+			info_page_only: false,
+		});
 	}
 
 	#[test]
 	fn should_parse_dapp_opening() {
 		// given
-		let temp = RandomTempPath::new();
-		let name = temp.file_name().unwrap().to_str().unwrap();
-		create_dir(temp.as_str().to_owned()).unwrap();
+		let tempdir = TempDir::new("").unwrap();
 
 		// when
-		let conf0 = parse(&["parity", "dapp", temp.to_str().unwrap()]);
+		let conf0 = parse(&["parity", "dapp", tempdir.path().to_str().unwrap()]);
 
 		// then
-		assert_eq!(conf0.dapp_to_open(), Ok(Some(name.into())));
+		assert_eq!(conf0.dapp_to_open(), Ok(Some(tempdir.path().file_name().unwrap().to_str().unwrap().into())));
 		let extra_dapps = conf0.dapps_config().extra_dapps;
-		assert_eq!(extra_dapps, vec![temp.to_owned()]);
+		assert_eq!(extra_dapps, vec![tempdir.path().to_owned()]);
 	}
 
 	#[test]
 	fn should_not_bail_on_empty_line_in_reserved_peers() {
-		let temp = RandomTempPath::new();
-		create_dir(temp.as_str().to_owned()).unwrap();
-		let filename = temp.as_str().to_owned() + "/peers";
-		File::create(filename.clone()).unwrap().write_all(b"  \n\t\n").unwrap();
-		let args = vec!["parity", "--reserved-peers", &filename];
+		let tempdir = TempDir::new("").unwrap();
+		let filename = tempdir.path().join("peers");
+		File::create(&filename).unwrap().write_all(b"  \n\t\n").unwrap();
+		let args = vec!["parity", "--reserved-peers", filename.to_str().unwrap()];
 		let conf = Configuration::parse(&args, None).unwrap();
 		assert!(conf.init_reserved_nodes().is_ok());
 	}
 
 	#[test]
 	fn should_ignore_comments_in_reserved_peers() {
-		let temp = RandomTempPath::new();
-		create_dir(temp.as_str().to_owned()).unwrap();
-		let filename = temp.as_str().to_owned() + "/peers_comments";
-		File::create(filename.clone()).unwrap().write_all(b"# Sample comment\nenode://6f8a80d14311c39f35f516fa664deaaaa13e85b2f7493f37f6144d86991ec012937307647bd3b9a82abe2974e1407241d54947bbb39763a4cac9f77166ad92a0@172.0.0.1:30303\n").unwrap();
-		let args = vec!["parity", "--reserved-peers", &filename];
+		let tempdir = TempDir::new("").unwrap();
+		let filename = tempdir.path().join("peers_comments");
+		File::create(&filename).unwrap().write_all(b"# Sample comment\nenode://6f8a80d14311c39f35f516fa664deaaaa13e85b2f7493f37f6144d86991ec012937307647bd3b9a82abe2974e1407241d54947bbb39763a4cac9f77166ad92a0@172.0.0.1:30303\n").unwrap();
+		let args = vec!["parity", "--reserved-peers", filename.to_str().unwrap()];
 		let conf = Configuration::parse(&args, None).unwrap();
 		let reserved_nodes = conf.init_reserved_nodes();
 		assert!(reserved_nodes.is_ok());
@@ -1876,5 +2073,57 @@ mod tests {
 		let local_path = ::dir::default_local_path();
 		assert_eq!(std.directories().cache, dir::helpers::replace_home_and_local(&base_path, &local_path, ::dir::CACHE_PATH));
 		assert_eq!(base.directories().cache, "/test/cache");
+	}
+
+	#[test]
+	fn should_respect_only_max_peers_and_default() {
+		let args = vec!["parity", "--max-peers=50"];
+		let conf = Configuration::parse(&args, None).unwrap();
+		match conf.into_command().unwrap().cmd {
+			Cmd::Run(c) => {
+				assert_eq!(c.net_conf.min_peers, 25);
+				assert_eq!(c.net_conf.max_peers, 50);
+			},
+			_ => panic!("Should be Cmd::Run"),
+		}
+	}
+
+	#[test]
+	fn should_respect_only_max_peers_less_than_default() {
+		let args = vec!["parity", "--max-peers=5"];
+		let conf = Configuration::parse(&args, None).unwrap();
+		match conf.into_command().unwrap().cmd {
+			Cmd::Run(c) => {
+				assert_eq!(c.net_conf.min_peers, 5);
+				assert_eq!(c.net_conf.max_peers, 5);
+			},
+			_ => panic!("Should be Cmd::Run"),
+		}
+	}
+
+	#[test]
+	fn should_respect_only_min_peers_and_default() {
+		let args = vec!["parity", "--min-peers=5"];
+		let conf = Configuration::parse(&args, None).unwrap();
+		match conf.into_command().unwrap().cmd {
+			Cmd::Run(c) => {
+				assert_eq!(c.net_conf.min_peers, 5);
+				assert_eq!(c.net_conf.max_peers, 50);
+			},
+			_ => panic!("Should be Cmd::Run"),
+		}
+	}
+
+	#[test]
+	fn should_respect_only_min_peers_and_greater_than_default() {
+		let args = vec!["parity", "--min-peers=500"];
+		let conf = Configuration::parse(&args, None).unwrap();
+		match conf.into_command().unwrap().cmd {
+			Cmd::Run(c) => {
+				assert_eq!(c.net_conf.min_peers, 500);
+				assert_eq!(c.net_conf.max_peers, 500);
+			},
+			_ => panic!("Should be Cmd::Run"),
+		}
 	}
 }

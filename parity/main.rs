@@ -29,7 +29,7 @@ extern crate env_logger;
 extern crate fdlimit;
 extern crate futures;
 extern crate futures_cpupool;
-extern crate isatty;
+extern crate atty;
 extern crate jsonrpc_core;
 extern crate num_cpus;
 extern crate number_prefix;
@@ -43,23 +43,25 @@ extern crate serde;
 extern crate serde_json;
 #[macro_use]
 extern crate serde_derive;
-extern crate time;
 extern crate toml;
 
 extern crate ethcore;
-extern crate ethcore_devtools as devtools;
+extern crate ethcore_bytes as bytes;
 extern crate ethcore_io as io;
 extern crate ethcore_light as light;
 extern crate ethcore_logger;
-extern crate ethcore_util as util;
-extern crate ethcore_bigint as bigint;
-extern crate ethcore_bytes as bytes;
+extern crate ethcore_migrations as migrations;
+extern crate ethcore_miner as miner;
 extern crate ethcore_network as network;
-extern crate migration as migr;
+extern crate ethcore_private_tx;
+extern crate ethcore_service;
+extern crate ethcore_sync as sync;
+extern crate ethcore_transaction as transaction;
+extern crate ethereum_types;
+extern crate ethkey;
 extern crate kvdb;
 extern crate kvdb_rocksdb;
-extern crate ethkey;
-extern crate ethsync;
+extern crate migration as migr;
 extern crate node_health;
 extern crate panic_hook;
 extern crate parity_hash_fetch as hash_fetch;
@@ -75,6 +77,7 @@ extern crate rpc_cli;
 extern crate node_filter;
 extern crate keccak_hash as hash;
 extern crate journaldb;
+extern crate registrar;
 
 #[macro_use]
 extern crate log as rlog;
@@ -92,8 +95,10 @@ extern crate parity_dapps;
 #[macro_use]
 extern crate pretty_assertions;
 
-#[cfg(windows)] extern crate ws2_32;
 #[cfg(windows)] extern crate winapi;
+
+#[cfg(test)]
+extern crate tempdir;
 
 mod account;
 mod blockchain;
@@ -101,6 +106,7 @@ mod cache;
 mod cli;
 mod configuration;
 mod dapps;
+mod export_hardcoded_sync;
 mod ipfs;
 mod deprecated;
 mod helpers;
@@ -140,7 +146,7 @@ fn print_hash_of(maybe_file: Option<String>) -> Result<String, String> {
 	if let Some(file) = maybe_file {
 		let mut f = BufReader::new(File::open(&file).map_err(|_| "Unable to open file".to_owned())?);
 		let hash = keccak_buffer(&mut f).map_err(|_| "Unable to read from file".to_owned())?;
-		Ok(hash.hex())
+		Ok(format!("{:x}", hash))
 	} else {
 		Err("Streaming from standard input not yet supported. Specify a file.".to_owned())
 	}
@@ -170,6 +176,7 @@ fn execute(command: Execute, can_restart: bool) -> Result<PostExecutionAction, S
 		Cmd::SignerList { port, authfile } => rpc_cli::signer_list(port, authfile).map(|s| PostExecutionAction::Print(s)),
 		Cmd::SignerReject { id, port, authfile } => rpc_cli::signer_reject(id, port, authfile).map(|s| PostExecutionAction::Print(s)),
 		Cmd::Snapshot(snapshot_cmd) => snapshot::execute(snapshot_cmd).map(|s| PostExecutionAction::Print(s)),
+		Cmd::ExportHardcodedSync(export_hs_cmd) => export_hardcoded_sync::execute(export_hs_cmd).map(|s| PostExecutionAction::Print(s)),
 	}
 }
 
@@ -230,7 +237,7 @@ fn global_cleanup() {
 	// The loop is required because of internal refernce counter for winsock dll. We don't know how many crates we use do
 	// initialize it. There's at least 2 now.
 	for _ in 0.. 10 {
-		unsafe { ::ws2_32::WSACleanup(); }
+		unsafe { ::winapi::um::winsock2::WSACleanup(); }
 	}
 }
 
@@ -242,8 +249,8 @@ fn global_init() {
 	// When restarting in the same process this reinits windows sockets.
 	unsafe {
 		const WS_VERSION: u16 = 0x202;
-		let mut wsdata: ::winapi::winsock2::WSADATA = ::std::mem::zeroed();
-		::ws2_32::WSAStartup(WS_VERSION, &mut wsdata);
+		let mut wsdata: ::winapi::um::winsock2::WSADATA = ::std::mem::zeroed();
+		::winapi::um::winsock2::WSAStartup(WS_VERSION, &mut wsdata);
 	}
 }
 

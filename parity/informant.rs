@@ -22,20 +22,22 @@ use std::sync::{Arc};
 use std::sync::atomic::{AtomicUsize, AtomicBool, Ordering as AtomicOrdering};
 use std::time::{Instant, Duration};
 
-use ethcore::client::{BlockId, BlockChainClient, BlockChainInfo, BlockQueueInfo, ChainNotify, ClientReport, Client};
+use atty;
+use ethcore::client::{
+	BlockId, BlockChainClient, ChainInfo, BlockInfo, BlockChainInfo,
+	BlockQueueInfo, ChainNotify, ClientReport, Client, ClientIoMessage
+};
 use ethcore::header::BlockNumber;
-use ethcore::service::ClientIoMessage;
 use ethcore::snapshot::{RestorationStatus, SnapshotService as SS};
 use ethcore::snapshot::service::Service as SnapshotService;
-use ethsync::{LightSyncProvider, LightSync, SyncProvider, ManageNetwork};
+use sync::{LightSyncProvider, LightSync, SyncProvider, ManageNetwork};
 use io::{TimerToken, IoContext, IoHandler};
-use isatty::{stdout_isatty};
 use light::Cache as LightDataCache;
 use light::client::LightChainClient;
 use number_prefix::{binary_prefix, Standalone, Prefixed};
 use parity_rpc::{is_major_importing};
 use parity_rpc::informant::RpcStats;
-use bigint::hash::H256;
+use ethereum_types::H256;
 use bytes::Bytes;
 use parking_lot::{RwLock, Mutex};
 
@@ -291,7 +293,7 @@ impl<T: InformantData> Informant<T> {
 
 		*self.last_tick.write() = Instant::now();
 
-		let paint = |c: Style, t: String| match self.with_color && stdout_isatty() {
+		let paint = |c: Style, t: String| match self.with_color && atty::is(atty::Stream::Stdout) {
 			true => format!("{}", c.paint(t)),
 			false => t,
 		};
