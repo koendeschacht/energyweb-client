@@ -18,7 +18,6 @@
         "networkID": "0x62121",
 	"wasmActivationTransition": 4000000,
 	"eip658Transition": 4600000
-
     },
     "genesis": {
         "seal": {
