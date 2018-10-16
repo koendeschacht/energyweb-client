@@ -16,7 +16,7 @@
 
 use std::collections::HashMap;
 use parking_lot::RwLock;
-use itertools::Itertools;
+use itertools;
 use ethkey::Address;
 
 use {SafeAccount, Error};
